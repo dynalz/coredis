@@ -1,3 +1,5 @@
+from typing import Dict, List
+
 from coredis.exceptions import RedisError
 from coredis.utils import bool_ok, dict_merge, pairs_to_dict, string_keys_to_dict
 
@@ -13,7 +15,7 @@ def stream_list(response):
             kv_dict = dict()
 
             while kv_pairs and len(kv_pairs) > 1:
-                kv_dict[kv_pairs.pop()] = kv_pairs.pop()
+                kv_Dict[kv_pairs.pop()] = kv_pairs.pop()
             result.append((r[0], kv_dict))
 
     return result
@@ -108,7 +110,7 @@ class StreamsCommandMixin(CommandMixin):
 
         return await self.execute_command("XLEN", key)
 
-    async def xrange(self, key: str, start="-", end="+", count=None) -> list:
+    async def xrange(self, key: str, start="-", end="+", count=None) -> List:
         """
         Read stream values within an interval.
 
@@ -132,7 +134,7 @@ class StreamsCommandMixin(CommandMixin):
 
         return await self.execute_command("XRANGE", key, *pieces)
 
-    async def xrevrange(self, key: str, start="+", end="-", count=None) -> list:
+    async def xrevrange(self, key: str, start="+", end="-", count=None) -> List:
         """
         Read stream values within an interval, in reverse order.
 
@@ -155,7 +157,7 @@ class StreamsCommandMixin(CommandMixin):
 
         return await self.execute_command("XREVRANGE", key, *pieces)
 
-    async def xread(self, count=None, block=None, **streams) -> dict:
+    async def xread(self, count=None, block=None, **streams) -> Dict:
         """
         Read data from one or multiple streams,
         only returning entries with an ID greater
@@ -233,7 +235,7 @@ class StreamsCommandMixin(CommandMixin):
 
     async def xpending(
         self, key: str, group: str, start="-", end="+", count=None, consumer=None
-    ) -> list:
+    ) -> List:
         """
         Fetching data from a stream via a consumer group,
         and not acknowledging such data,
@@ -302,7 +304,7 @@ class StreamsCommandMixin(CommandMixin):
 
         return await self.execute_command("XDEL", key, stream_id)
 
-    async def xinfo_consumers(self, key: str, group: str) -> list:
+    async def xinfo_consumers(self, key: str, group: str) -> List:
         """
         XINFO command is an observability interface that can be used
         with sub-commands in order to get information
@@ -314,7 +316,7 @@ class StreamsCommandMixin(CommandMixin):
 
         return await self.execute_command("XINFO CONSUMERS", key, group)
 
-    async def xinfo_groups(self, key: str) -> list:
+    async def xinfo_groups(self, key: str) -> List:
         """
         XINFO command is an observability interface that can be used
         with sub-commands in order to get information
@@ -325,7 +327,7 @@ class StreamsCommandMixin(CommandMixin):
 
         return await self.execute_command("XINFO GROUPS", key)
 
-    async def xinfo_stream(self, key: str) -> dict:
+    async def xinfo_stream(self, key: str) -> Dict:
         """
         XINFO command is an observability interface that can be used
         with sub-commands in order to get information

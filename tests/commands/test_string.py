@@ -2,6 +2,7 @@ import datetime
 
 import pytest
 
+from coredis import CommandSyntaxError, PureToken
 from coredis.utils import b, iteritems
 from tests.conftest import targets
 
@@ -20,8 +21,6 @@ class TestString:
         assert await client.get("a") == b("-1")
         assert await client.decr("a") == -2
         assert await client.get("a") == b("-2")
-        assert await client.decr("a", amount=5) == -7
-        assert await client.get("a") == b("-7")
 
     async def test_decr_by(self, client):
         assert await client.decrby("a", 2) == -2
@@ -34,16 +33,14 @@ class TestString:
         assert await client.get("a") == b("1")
         assert await client.incr("a") == 2
         assert await client.get("a") == b("2")
-        assert await client.incr("a", amount=5) == 7
-        assert await client.get("a") == b("7")
 
     async def test_incrby(self, client):
-        assert await client.incrby("a") == 1
+        assert await client.incrby("a", 1) == 1
         assert await client.incrby("a", 4) == 5
         assert await client.get("a") == b("5")
 
     async def test_incrbyfloat(self, client):
-        assert await client.incrbyfloat("a") == 1.0
+        assert await client.incrbyfloat("a", 1.0) == 1.0
         assert await client.get("a") == b("1")
         assert await client.incrbyfloat("a", 1.1) == 2.1
         assert float(await client.get("a")) == float(2.1)
@@ -93,9 +90,11 @@ class TestString:
         assert await client.ttl("a") <= 61
         assert await client.getex("a", persist=True) == b"1"
         assert await client.ttl("a") == -1
+        with pytest.raises(CommandSyntaxError):
+            await client.getex("a", ex=1, px=1)
 
     async def test_mget(self, client):
-        assert await client.mget(["a", "b"]) == [None, None]
+        assert await client.mget("a", "b") == [None, None]
         await client.set("a", "1")
         await client.set("b", "2")
         await client.set("c", "3")
@@ -110,31 +109,15 @@ class TestString:
         d = {"a": b("1"), "b": b("2"), "c": b("3")}
         assert await client.mset(d)
 
-        for k, v in iteritems(d):
-            assert await client.get(k) == v
-
-    async def test_mset_kwargs(self, client):
-        d = {"a": b("1"), "b": b("2"), "c": b("3")}
-        assert await client.mset(**d)
-
-        for k, v in iteritems(d):
-            assert await client.get(k) == v
+        assert await client.get("a") == b("1")
+        assert await client.get("b") == b("2")
+        assert await client.get("c") == b("3")
 
     async def test_msetnx(self, client):
         d = {"a": b("1"), "b": b("2"), "c": b("3")}
         assert await client.msetnx(d)
         d2 = {"a": b("x"), "d": b("4")}
         assert not await client.msetnx(d2)
-
-        for k, v in iteritems(d):
-            assert await client.get(k) == v
-        assert await client.get("d") is None
-
-    async def test_msetnx_kwargs(self, client):
-        d = {"a": b("1"), "b": b("2"), "c": b("3")}
-        assert await client.msetnx(**d)
-        d2 = {"a": b("x"), "d": b("4")}
-        assert not await client.msetnx(**d2)
 
         for k, v in iteritems(d):
             assert await client.get(k) == v
@@ -152,15 +135,15 @@ class TestString:
         assert 0 < await client.pttl("a") <= 1000
 
     async def test_set_nx(self, client):
-        assert await client.set("a", "1", nx=True)
-        assert not await client.set("a", "2", nx=True)
+        assert await client.set("a", "1", condition=PureToken.NX)
+        assert not await client.set("a", "2", condition=PureToken.NX)
         assert await client.get("a") == b("1")
 
     async def test_set_xx(self, client):
-        assert not await client.set("a", "1", xx=True)
+        assert not await client.set("a", "1", condition=PureToken.XX)
         assert await client.get("a") is None
         await client.set("a", "bar")
-        assert await client.set("a", "2", xx=True)
+        assert await client.set("a", "2", condition=PureToken.XX)
         assert await client.get("a") == b("2")
 
     async def test_set_px(self, client):
@@ -186,11 +169,11 @@ class TestString:
 
     async def test_set_multipleoptions(self, client):
         await client.set("a", "val")
-        assert await client.set("a", "1", xx=True, px=10000)
+        assert await client.set("a", "1", condition=PureToken.XX, px=10000)
         assert 0 < await client.ttl("a") <= 10
 
     async def test_setex(self, client):
-        assert await client.setex("a", 60, "1")
+        assert await client.setex("a", "1", 60)
         assert await client.get("a") == b("1")
         assert 0 < await client.ttl("a") <= 60
 
@@ -213,8 +196,8 @@ class TestString:
 
     async def test_substr(self, client):
         await client.set("a", "0123456789")
-        assert await client.substr("a", 0) == b("0123456789")
-        assert await client.substr("a", 2) == b("23456789")
+        assert await client.substr("a", 0, -1) == b("0123456789")
+        assert await client.substr("a", 2, -1) == b("23456789")
         assert await client.substr("a", 3, 5) == b("345")
         assert await client.substr("a", 3, -2) == b("345678")
 

@@ -22,6 +22,10 @@ class TestServer:
         await client.config_set("slowlog-log-slower-than", old_slower_than_value)
         await client.config_set("slowlog-max-len", old_max_legnth_value)
 
+    async def test_commands_get(self, client):
+        commands = await client.command()
+        assert commands == [1, 2, 3]
+
     async def test_config_get(self, client):
         data = await client.config_get()
         assert "maxmemory" in data

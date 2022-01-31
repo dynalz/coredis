@@ -1,7 +1,13 @@
+import datetime
 import sys
+import time
 from functools import wraps
+from typing import Dict, List, Optional, Tuple, TypeVar, Union
 
 from coredis.exceptions import ClusterDownError, RedisClusterException
+
+T = TypeVar("T")
+U = TypeVar("U")
 
 _C_EXTENSION_SPEEDUP = False
 try:
@@ -20,6 +26,13 @@ def nativestr(x):
     return x if isinstance(x, str) else x.decode("utf-8", "replace")
 
 
+def string_if_bytes(x):
+    if isinstance(x, list):
+        return [string_if_bytes(y) for y in x]
+
+    return x.decode("utf-8", "replace") if isinstance(x, bytes) else x
+
+
 def iteritems(x):
     return iter(x.items())
 
@@ -30,6 +43,45 @@ def iterkeys(x):
 
 def itervalues(x):
     return iter(x.values())
+
+
+def normalized_seconds(
+    value: Optional[Union[int, datetime.timedelta]]
+) -> Optional[int]:
+    if isinstance(value, datetime.timedelta):
+        value = value.seconds + value.days * 24 * 3600
+
+    return value
+
+
+def normalized_milliseconds(
+    value: Optional[Union[int, datetime.timedelta]]
+) -> Optional[int]:
+    if isinstance(value, datetime.timedelta):
+        ms = int(value.microseconds / 1000)
+        value = (value.seconds + value.days * 24 * 3600) * 1000 + ms
+
+    return value
+
+
+def normalized_time_seconds(
+    value: Optional[Union[int, datetime.datetime]]
+) -> Optional[int]:
+    if isinstance(value, datetime.datetime):
+        s = int(value.microsecond / 1000000)
+        value = int(time.mktime(value.timetuple())) + s
+
+    return value
+
+
+def normalized_time_milliseconds(
+    value: Optional[Union[int, datetime.datetime]]
+) -> Optional[int]:
+    if isinstance(value, datetime.datetime):
+        ms = int(value.microsecond / 1000)
+        value = int(time.mktime(value.timetuple())) * 1000 + ms
+
+    return value
 
 
 def ban_python_version_lt(min_version):
@@ -89,6 +141,13 @@ def bool_ok(response):
     return nativestr(response) == "OK"
 
 
+def bool_ok_or_int(response):
+    if type(response) == int:
+        return response
+
+    return nativestr(response) == "OK"
+
+
 def list_or_args(keys, args):
     # returns a single list combining keys and args
     try:
@@ -114,11 +173,27 @@ def int_or_none(response):
     return int(response)
 
 
-def pairs_to_dict(response):
+def pairs_to_dict(response: Tuple[T, U]) -> Dict[T, U]:
     """Creates a dict given a list of key/value pairs"""
     it = iter(response)
 
     return dict(zip(it, it))
+
+
+def dict_to_flat_list(mapping: Dict[T, U], reverse=False) -> List[Union[T, U]]:
+    e1: List[Union[T, U]] = list(mapping.keys())
+    e2: List[Union[T, U]] = list(mapping.values())
+
+    if reverse:
+        e1, e2 = e2, e1
+
+    ret = []
+
+    for idx, e in enumerate(e1):
+        ret.append(e)
+        ret.append(e2[idx])
+
+    return ret
 
 
 # ++++++++++ result callbacks (cluster)++++++++++++++

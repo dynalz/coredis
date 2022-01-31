@@ -71,6 +71,7 @@ class BasePipeline:
         self.scripts = set()
         # make sure to reset the connection state in the event that we were
         # watching something
+
         if self.watching and self.connection:
             try:
                 # call this manually since our unwatch or
@@ -85,6 +86,7 @@ class BasePipeline:
         self.explicit_transaction = False
         # we can safely return the connection to the pool here since we're
         # sure we're no longer WATCHing anything
+
         if self.connection:
             self.connection_pool.release(self.connection)
             self.connection = None
@@ -94,8 +96,10 @@ class BasePipeline:
         Starts a transactional block of the pipeline after WATCH commands
         are issued. End the transactional block with `execute`.
         """
+
         if self.explicit_transaction:
             raise RedisError("Cannot issue nested calls to MULTI")
+
         if self.command_stack:
             raise RedisError(
                 "Commands without an initial WATCH have already " "been issued"
@@ -105,6 +109,7 @@ class BasePipeline:
     async def execute_command(self, *args, **kwargs):
         if (self.watching or args[0] == "WATCH") and not self.explicit_transaction:
             return await self.immediate_execute_command(*args, **kwargs)
+
         return self.pipeline_execute_command(*args, **kwargs)
 
     async def immediate_execute_command(self, *args, **options):
@@ -117,20 +122,24 @@ class BasePipeline:
         command_name = args[0]
         conn = self.connection
         # if this is the first call, we need a connection
+
         if not conn:
             conn = await self.connection_pool.get_connection()
             self.connection = conn
         try:
             await conn.send_command(*args)
+
             return await self.parse_response(conn, command_name, **options)
         except (ConnectionError, TimeoutError) as e:
             conn.disconnect()
+
             if not conn.retry_on_timeout and isinstance(e, TimeoutError):
                 raise
             # if we're not already watching, we can safely retry the command
             try:
                 if not self.watching:
                     await conn.send_command(*args)
+
                     return await self.parse_response(conn, command_name, **options)
             except ConnectionError:
                 # the retry failed so cleanup.
@@ -151,6 +160,7 @@ class BasePipeline:
         which will execute all commands queued in the pipe.
         """
         self.command_stack.append((args, options))
+
         return self
 
     async def _execute_transaction(self, connection, commands, raise_on_error):
@@ -169,6 +179,7 @@ class BasePipeline:
             errors.append((0, sys.exc_info()[1]))
 
         # and all the other commands
+
         for i, command in enumerate(commands):
             try:
                 await self.parse_response(connection, "_")
@@ -183,6 +194,7 @@ class BasePipeline:
         except ExecAbortError:
             if self.explicit_transaction:
                 await self.immediate_execute_command("DISCARD")
+
             if errors:
                 raise errors[0][1]
             raise sys.exc_info()[1]
@@ -191,6 +203,7 @@ class BasePipeline:
             raise WatchError("Watched variable changed.")
 
         # put any parse errors into the response
+
         for i, e in errors:
             response.insert(i, e)
 
@@ -201,24 +214,29 @@ class BasePipeline:
             )
 
         # find any errors in the response and raise if necessary
+
         if raise_on_error:
             self.raise_first_error(commands, response)
 
         # We have to run response callbacks manually
         data = []
+
         for r, cmd in zip(response, commands):
             if not isinstance(r, Exception):
                 args, options = cmd
                 command_name = args[0]
+
                 if command_name in self.response_callbacks:
                     callback = self.response_callbacks[command_name]
                     r = callback(r, **options)
                     # typing.Awaitable is not available in Python3.5
                     # so use inspect.isawaitable instead
                     # according to issue https://github.com/alisaifee/coredis/issues/77
+
                     if inspect.isawaitable(response):
                         r = await r
             data.append(r)
+
         return data
 
     async def _execute_pipeline(self, connection, commands, raise_on_error):
@@ -227,6 +245,7 @@ class BasePipeline:
         await connection.send_packed_command(all_cmds)
 
         response = []
+
         for args, options in commands:
             try:
                 response.append(
@@ -237,6 +256,7 @@ class BasePipeline:
 
         if raise_on_error:
             self.raise_first_error(commands, response)
+
         return response
 
     def raise_first_error(self, commands, response):
@@ -257,17 +277,22 @@ class BasePipeline:
     async def _parse(self, connection, command_name, **options):
         "Parses a response from the Redis server"
         response = await connection.read_response()
+
         if command_name in self.response_callbacks:
             callback = self.response_callbacks[command_name]
+
             return callback(response, **options)
+
         return response
 
     async def parse_response(self, connection, command_name, **options):
         result = await self._parse(connection, command_name, **options)
+
         if command_name in self.UNWATCH_COMMANDS:
             self.watching = False
         elif command_name == "WATCH":
             self.watching = True
+
         return result
 
     async def load_scripts(self):
@@ -278,6 +303,7 @@ class BasePipeline:
         # we can't use the normal script_* methods because they would just
         # get buffered in the pipeline.
         exists = await immediate("SCRIPT EXISTS", *shas)
+
         if not all(exists):
             for s, exist in zip(scripts, exists):
                 if not exist:
@@ -286,16 +312,20 @@ class BasePipeline:
     async def execute(self, raise_on_error=True):
         """Executes all the commands in the current pipeline"""
         stack = self.command_stack
+
         if not stack:
             return []
+
         if self.scripts:
             await self.load_scripts()
+
         if self.transaction or self.explicit_transaction:
             exec = self._execute_transaction
         else:
             exec = self._execute_pipeline
 
         conn = self.connection
+
         if not conn:
             conn = await self.connection_pool.get_connection()
             # assign to self.connection so reset() releases the connection
@@ -306,6 +336,7 @@ class BasePipeline:
             return await exec(conn, stack, raise_on_error)
         except (ConnectionError, TimeoutError, CancelledError) as e:
             conn.disconnect()
+
             if not conn.retry_on_timeout and isinstance(e, TimeoutError):
                 raise
             # if we were watching a variable, the watch is no longer valid
@@ -313,24 +344,29 @@ class BasePipeline:
             # indicates the user should retry his transaction. If this is more
             # than a temporary failure, the WATCH that the user next issues
             # will fail, propegating the real ConnectionError
+
             if self.watching:
                 raise WatchError(
                     "A ConnectionError occured on while watching " "one or more keys"
                 )
             # otherwise, it's safe to retry since the transaction isn't
             # predicated on any state
+
             return await exec(conn, stack, raise_on_error)
         finally:
             await self.reset()
 
-    async def watch(self, *names):
-        """Watches the values at keys ``names``"""
+    async def watch(self, *keys: str) -> bool:
+        """Watches the values at keys ``keys``"""
+
         if self.explicit_transaction:
             raise RedisError("Cannot issue a WATCH after a MULTI")
-        return await self.execute_command("WATCH", *names)
 
-    async def unwatch(self):
+        return await self.execute_command("WATCH", *keys)
+
+    async def unwatch(self) -> bool:
         """Unwatches all previously specified keys"""
+
         return self.watching and await self.execute_command("UNWATCH") or True
 
 
@@ -381,6 +417,7 @@ class StrictClusterPipeline(StrictRedisCluster):
 
     def _determine_slot(self, *args):
         """Figure out what slot based on command and args"""
+
         if len(args) <= 1:
             raise RedisClusterException(
                 "No way to dispatch this command to Redis Cluster. Missing key."
@@ -391,10 +428,12 @@ class StrictClusterPipeline(StrictRedisCluster):
             numkeys = args[2]
             keys = args[3 : 3 + numkeys]
             slots = {self.connection_pool.nodes.keyslot(key) for key in keys}
+
             if len(slots) != 1:
                 raise RedisClusterException(
                     "{0} - all keys must map to the same key slot".format(command)
                 )
+
             return slots.pop()
 
         key = args[1]
@@ -408,11 +447,13 @@ class StrictClusterPipeline(StrictRedisCluster):
         self.command_stack.append(
             PipelineCommand(args, options, len(self.command_stack))
         )
+
         return self
 
     def raise_first_error(self, stack):
         for c in stack:
             r = c.result
+
             if isinstance(r, Exception):
                 self.annotate_exception(r, c.position + 1, c.args)
                 raise r
@@ -430,6 +471,7 @@ class StrictClusterPipeline(StrictRedisCluster):
 
         if not stack:
             return []
+
         if self.transaction:
             execute = self.send_cluster_transaction
         else:
@@ -458,6 +500,7 @@ class StrictClusterPipeline(StrictRedisCluster):
 
         # as we move through each command that still needs to be processed,
         # we figure out the slot number that command maps to, then from the slot determine the node.
+
         for c in attempt:
             # refer to our internal node -> slot table that tells us where a given
             # command should route to.
@@ -466,14 +509,17 @@ class StrictClusterPipeline(StrictRedisCluster):
 
             # now that we know the name of the node ( it's just a string in the form of host:port )
             # we can build a list of commands for each node.
+
             if node.get("name") != hashed_node["name"]:
                 # raise error if commands in a transaction can not hash to same node
+
                 if len(node) > 0:
                     raise ClusterTransactionError(
                         "Keys in request don't hash to the same node"
                     )
             node = hashed_node
         conn = self.connection_pool.get_connection_by_node(node)
+
         if self.watches:
             await self._watch(node, conn, self.watches)
         node_commands = NodeCommands(self.parse_response, conn, in_transaction=True)
@@ -493,11 +539,14 @@ class StrictClusterPipeline(StrictRedisCluster):
         # If at least one watched key is modified before the EXEC command,
         # the whole transaction aborts,
         # and EXEC returns a Null reply to notify that the transaction failed.
+
         if node_commands.commands[-1].result is None:
             raise WatchError
         self.connection_pool.release(conn)
+
         if self.watching:
             self._unwatch(conn)
+
         if raise_on_error:
             self.raise_first_error(stack)
 
@@ -520,6 +569,7 @@ class StrictClusterPipeline(StrictRedisCluster):
 
         # as we move through each command that still needs to be processed,
         # we figure out the slot number that command maps to, then from the slot determine the node.
+
         for c in attempt:
             # refer to our internal node -> slot table that tells us where a given
             # command should route to.
@@ -532,6 +582,7 @@ class StrictClusterPipeline(StrictRedisCluster):
             # now that we know the name of the node ( it's just a string in the form of host:port )
             # we can build a list of commands for each node.
             node_name = node["name"]
+
             if node_name not in nodes:
                 nodes[node_name] = NodeCommands(
                     self.parse_response,
@@ -547,6 +598,7 @@ class StrictClusterPipeline(StrictRedisCluster):
         # we dont' multiplex on the sockets as they come available, but that shouldn't make
         # too much difference.
         node_commands = nodes.values()
+
         for n in node_commands:
             await n.write()
 
@@ -564,6 +616,7 @@ class StrictClusterPipeline(StrictRedisCluster):
         # next time we read from it we pass the buffered result back from a previous
         # command and every single request after to that connection will always get
         # a mismatched result. (not just theoretical, I saw this happen on production x.x).
+
         for n in nodes.values():
             self.connection_pool.release(n.connection)
 
@@ -576,6 +629,7 @@ class StrictClusterPipeline(StrictRedisCluster):
             [c for c in attempt if isinstance(c.result, ERRORS_ALLOW_RETRY)],
             key=lambda x: x.position,
         )
+
         if attempt and allow_redirections:
             # RETRY MAGIC HAPPENS HERE!
             # send these remaing comamnds one at a time using `execute_command`
@@ -595,6 +649,7 @@ class StrictClusterPipeline(StrictRedisCluster):
             await self.connection_pool.nodes.increment_reinitialize_counter(
                 len(attempt)
             )
+
             for c in attempt:
                 try:
                     # send each command individually like we do in the main client.
@@ -632,24 +687,30 @@ class StrictClusterPipeline(StrictRedisCluster):
 
     async def _watch(self, node, conn, names):
         "Watches the values at keys ``names``"
+
         for name in names:
             slot = self._determine_slot("WATCH", name)
             dist_node = self.connection_pool.get_node_by_slot(slot)
+
             if node.get("name") != dist_node["name"]:
                 # raise error if commands in a transaction can not hash to same node
+
                 if len(node) > 0:
                     raise ClusterTransactionError(
                         "Keys in request don't hash to the same node"
                     )
+
         if self.explicit_transaction:
             raise RedisError("Cannot issue a WATCH after a MULTI")
         await conn.send_command("WATCH", *names)
+
         return await conn.read_response()
 
     async def _unwatch(self, conn):
         """Unwatches all previously specified keys"""
         await conn.send_command("UNWATCH")
         res = await conn.read_response()
+
         return self.watching and res or True
 
     def script_load_for_pipeline(self, *args, **kwargs):
@@ -659,6 +720,7 @@ class StrictClusterPipeline(StrictRedisCluster):
 
     def delete(self, *names):
         """Deletes a key specified by ``names``"""
+
         if len(names) != 1:
             raise RedisClusterException(
                 "deleting multiple keys is not implemented in pipeline command"
@@ -814,6 +876,7 @@ class PipelineCommand:
 
     def __init__(self, args, options=None, position=None):
         self.args = args
+
         if options is None:
             options = {}
         self.options = options
@@ -847,6 +910,7 @@ class NodeCommands:
 
         # We are going to clobber the commands with the write, so go ahead
         # and ensure that nothing is sitting there from a previous run.
+
         for c in commands:
             c.result = None
 
@@ -862,6 +926,7 @@ class NodeCommands:
 
     async def read(self):
         connection = self.connection
+
         for c in self.commands:
 
             # if there is a result on this command, it means we ran into an exception
@@ -874,6 +939,7 @@ class NodeCommands:
             # Treating this case as a connection error is fine because it will dump
             # the connection object back into the pool and on the next write, it will
             # explicitly open the connection and all will be well.
+
             if c.result is None:
                 try:
                     if self.in_transaction:

@@ -1,6 +1,7 @@
 import pytest
 
 import coredis
+from coredis import PureToken, ResponseError
 from tests.conftest import targets
 
 
@@ -8,15 +9,54 @@ from tests.conftest import targets
 @pytest.mark.asyncio()
 class TestConnection:
     async def test_ping(self, client):
-        assert await client.ping()
+        resp = await client.ping()
+        assert resp == b"PONG"
+
+    async def test_ping_custom_message(self, client):
+        resp = await client.ping(message="PANG")
+        assert resp == b"PANG"
 
     async def test_echo(self, client):
         assert await client.echo("foo bar") == b"foo bar"
+
+    async def test_client_id(self, client):
+        id_ = await client.client_id()
+        assert isinstance(id_, int)
+
+    async def test_client_info(self, client):
+        info = await client.client_info()
+        assert isinstance(info, dict)
+        assert "addr" in info
+
+    async def test_client_reply(self, client):
+        assert await client.client_reply(PureToken.ON)
+
+    async def test_client_trackinginfo_no_tracking(self, client):
+        info = await client.client_trackinginfo()
+        assert info["flags"] == ["off"]
+
+    async def test_client_trackinginfo_tracking_set(self, client):
+        resp = await client.client_tracking(PureToken.ON)
+        assert resp
+        info = await client.client_trackinginfo()
+        assert info["flags"] == ["on"]
 
     async def test_client_list(self, client):
         clients = await client.client_list()
         assert isinstance(clients[0], dict)
         assert "addr" in clients[0]
+
+    async def test_client_kill_fail(self, client):
+        with pytest.raises(ResponseError):
+            await client.client_kill(ip_port="1.1.1.1:9999")
+
+    async def test_client_kill_filter(self, client):
+        resp = await client.client_kill(type_=PureToken.NORMAL)
+        assert resp > 0
+
+    async def test_client_kill_filter_skip_me(self, client):
+        resp = await client.client_kill(type_=PureToken.NORMAL, skipme=True)
+        assert resp > 0
 
     async def test_client_list_after_client_setname(self, client):
         await client.client_setname("cl=i=ent")

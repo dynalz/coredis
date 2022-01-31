@@ -24,10 +24,10 @@ class TestSet:
 
     async def test_sdiffstore(self, client):
         await client.sadd("a", "1", "2", "3")
-        assert await client.sdiffstore("c", "a", "b") == 3
+        assert await client.sdiffstore("a", "b", destination="c") == 3
         assert await client.smembers("c") == set([b("1"), b("2"), b("3")])
         await client.sadd("b", "2", "3")
-        assert await client.sdiffstore("c", "a", "b") == 1
+        assert await client.sdiffstore("a", "b", destination="c") == 1
         assert await client.smembers("c") == set([b("1")])
 
     async def test_sinter(self, client):
@@ -38,10 +38,10 @@ class TestSet:
 
     async def test_sinterstore(self, client):
         await client.sadd("a", "1", "2", "3")
-        assert await client.sinterstore("c", "a", "b") == 0
+        assert await client.sinterstore("a", "b", destination="c") == 0
         assert await client.smembers("c") == set()
         await client.sadd("b", "2", "3")
-        assert await client.sinterstore("c", "a", "b") == 2
+        assert await client.sinterstore("a", "b", destination="c") == 2
         assert await client.smembers("c") == set([b("2"), b("3")])
 
     async def test_sismember(self, client):
@@ -60,7 +60,6 @@ class TestSet:
         await client.sadd("a", "1", "2", "3")
         result_list = [True, False, True, True]
         assert (await client.smismember("a", "1", "4", "2", "3")) == result_list
-        assert (await client.smismember("a", ["1", "4", "2", "3"])) == result_list
 
     async def test_smove(self, client):
         await client.sadd("a", "a1", "a2")
@@ -73,7 +72,7 @@ class TestSet:
         s = [b("1"), b("2"), b("3")]
         await client.sadd("a", *s)
         value = await client.spop("a")
-        assert set(await client.smembers("a")) == set(s) - set([value])
+        assert set(await client.smembers("a")) == set(s) - set(value)
 
     async def test_spop_multi_value(self, client):
         s = [b("1"), b("2"), b("3")]
@@ -84,12 +83,12 @@ class TestSet:
     async def test_srandmember(self, client):
         s = [b("1"), b("2"), b("3")]
         await client.sadd("a", *s)
-        assert await client.srandmember("a") in s
+        assert (await client.srandmember("a"))[0] in s
 
     async def test_srandmember_multi_value(self, client):
         s = [b("1"), b("2"), b("3")]
         await client.sadd("a", *s)
-        randoms = await client.srandmember("a", number=2)
+        randoms = await client.srandmember("a", count=2)
         assert len(randoms) == 2
         assert set(randoms).intersection(s) == set(randoms)
 
@@ -107,7 +106,7 @@ class TestSet:
     async def test_sunionstore(self, client):
         await client.sadd("a", "1", "2")
         await client.sadd("b", "2", "3")
-        assert await client.sunionstore("c", "a", "b") == 3
+        assert await client.sunionstore("a", "b", destination="c") == 3
         assert await client.smembers("c") == set([b("1"), b("2"), b("3")])
 
     async def test_sscan(self, client):

@@ -38,6 +38,8 @@ Utility Classes
 
 .. autoclass::
    BitFieldOperation
+.. autoclass::
+   PureToken
 
 Exceptions
 ^^^^^^^^^^

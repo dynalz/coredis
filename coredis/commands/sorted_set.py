@@ -1,13 +1,16 @@
+from typing import Dict, List, Literal, Optional, Tuple, Union
+
+from deprecated.sphinx import deprecated, versionadded, versionchanged
+
 from coredis.exceptions import DataError, RedisError
+from coredis.tokens import PureToken
 from coredis.utils import (
     b,
     dict_merge,
+    dict_to_flat_list,
     first_key,
     int_or_none,
     iteritems,
-    iterkeys,
-    itervalues,
-    list_or_args,
     string_keys_to_dict,
 )
 
@@ -17,10 +20,8 @@ VALID_ZADD_OPTIONS = {"NX", "XX", "CH", "INCR"}
 
 
 def float_or_none(response):
-    if response is None:
-        return None
-
-    return float(response)
+    if response is not None:
+        return float(response)
 
 
 def zset_score_pairs(response, **options):
@@ -31,10 +32,10 @@ def zset_score_pairs(response, **options):
 
     if not response or not options.get("withscores"):
         return response
-    score_cast_func = options.get("score_cast_func", float)
+
     it = iter(response)
 
-    return list(zip(it, map(score_cast_func, it)))
+    return list(zip(it, map(float, it)))
 
 
 def parse_zmscore(response, **options):
@@ -73,32 +74,699 @@ class SortedSetCommandMixin(CommandMixin):
         {"ZMSCORE": parse_zmscore},
     )
 
-    async def zadd(self, key, *args, **kwargs):
+    # Redis command mapping
+
+    @versionchanged(
+        reason="Changed :paramref:`keys` to variable arguments", version="3.1.0"
+    )
+    @versionadded(version="2.1.0")
+    async def bzpopmax(
+        self, *keys: str, timeout: float
+    ) -> List[Tuple[str, str, float]]:
         """
-        Set any number of score, element-name pairs to the key ``key``. Pairs
-        can be specified in two ways:
+        Remove and return the member with the highest score from one or more sorted sets,
+        or block until one is available.
 
-        As ``*args``, in the form of: score1, name1, score2, name2, ...
-        or as ``**kwargs``, in the form of: name1=score1, name2=score2, ...
-
-        The following example would add four values to the 'my-key' key:
-        redis.zadd('my-key', 1.1, 'name1', 2.2, 'name2', name3=3.3, name4=4.4)
+        :return: A triplet with the first element being the name of the key
+         where a member was popped, the second element is the popped member itself,
+         and the third element is the score of the popped element.
         """
-        pieces = []
 
-        if args:
-            if len(args) % 2 != 0:
-                raise RedisError(
-                    "ZADD requires an equal number of " "values and scores"
-                )
-            pieces.extend(args)
+        if timeout is None:
+            timeout = 0
 
-        for pair in iteritems(kwargs):
-            pieces.append(pair[1])
-            pieces.append(pair[0])
+        return await self.execute_command("BZPOPMAX", *keys, timeout)
+
+    @versionchanged(
+        reason="Changed :paramref:`keys` to variable arguments", version="3.1.0"
+    )
+    @versionadded(version="2.1.0")
+    async def bzpopmin(
+        self, *keys: str, timeout: float
+    ) -> List[Tuple[str, str, float]]:
+        """
+        Remove and return the member with the lowest score from one or more sorted sets,
+        or block until one is available
+
+        :return: A triplet with the first element being the name of the key
+         where a member was popped, the second element is the popped member itself,
+         and the third element is the score of the popped element.
+        """
+
+        if timeout is None:
+            timeout = 0
+
+        return await self.execute_command("BZPOPMIN", *keys, timeout)
+
+    @versionchanged(
+        reason="""
+        score/member pairs are now only accepted via the :paramref:`member_scores` argument
+        """,
+        version="3.0.0",
+    )
+    async def zadd(
+        self,
+        key: str,
+        member_scores: Dict[str, float],
+        condition: Optional[Literal[PureToken.NX, PureToken.XX]] = None,
+        comparison: Optional[Literal[PureToken.GT, PureToken.LT]] = None,
+        change: Optional[bool] = None,
+        increment: Optional[bool] = None,
+    ) -> Optional[Union[str, int]]:
+        """
+        Add one or more members to a sorted set, or update its score if it already exists
+
+        :param member_scores:
+        :param condition:
+        :param comparison:
+        :param change:
+        :param increment:
+
+
+        :return:
+         - When used without optional arguments, the number of elements added to the sorted set
+           (excluding score updates).
+         - If the ``change`` option is specified, the number of elements that were changed
+           (added or updated).
+         - If the ``condition``argument is specified, the new score of ``member``
+           (a double precision floating point number) represented as string
+         - ``None`` if the operation is aborted
+
+        """
+        pieces: List[Union[str, int, float]] = []
+
+        if change is not None:
+            pieces.append("CH")
+
+        if increment is not None:
+            pieces.append("INCR")
+
+        if condition:
+            pieces.append(condition.value)
+
+        if comparison:
+            pieces.append(comparison.value)
+
+        pieces.extend(dict_to_flat_list(member_scores, reverse=True))
 
         return await self.execute_command("ZADD", key, *pieces)
 
+    async def zcard(self, key: str) -> int:
+        """
+        Get the number of members in a sorted set
+
+        :return: the cardinality (number of elements) of the sorted set, or ``0``
+         if the ``key`` does not exist
+
+        """
+
+        return await self.execute_command("ZCARD", key)
+
+    async def zcount(self, key: str, min: float, max: float) -> int:
+        """
+        Count the members in a sorted set with scores within the given values
+
+        :return: the number of elements in the specified score range.
+        """
+
+        return await self.execute_command("ZCOUNT", key, min, max)
+
+    @versionchanged(
+        reason="Changed :paramref:`keys` to variable arguments", version="3.1.0"
+    )
+    @versionadded(version="2.1.0")
+    async def zdiff(self, *keys: str, withscores: Optional[bool] = None) -> List:
+        """
+        Subtract multiple sorted sets
+
+        :param withscores:
+
+        :return: the result of the difference (optionally with their scores, in case
+         the ``withscores`` option is given).
+        """
+        pieces = [len(keys), *keys]
+
+        if withscores:
+            pieces.append("WITHSCORES")
+
+        return await self.execute_command("ZDIFF", *pieces)
+
+    @versionchanged(
+        reason="Restructured arguments to keep :paramref:`keys` as var args for consistency",
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def zdiffstore(self, *keys: str, destination: str) -> int:
+        """
+        Subtract multiple sorted sets and store the resulting sorted set in a new key
+
+        :return: the number of elements in the resulting sorted set at ``destination``.
+        """
+        pieces = [len(keys), *keys]
+
+        return await self.execute_command("ZDIFFSTORE", destination, *pieces)
+
+    @versionchanged(
+        reason="Reordered and renamed arguments to be consistent with redis documentation",
+        version="3.0.0",
+    )
+    async def zincrby(self, key: str, increment: int, member: str) -> str:
+        """
+        Increment the score of a member in a sorted set
+
+        :return: the new score of ``member`` (a double precision floating point number),
+         represented as string.
+        """
+
+        return await self.execute_command("ZINCRBY", key, increment, member)
+
+    @versionchanged(
+        reason="Separated keys and weights into two separate arguments for clarity",
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def zinter(
+        self,
+        *keys: str,
+        weights: Optional[List[Optional[int]]] = None,
+        aggregate: Optional[
+            Literal[PureToken.SUM, PureToken.MIN, PureToken.MAX]
+        ] = None,
+        withscores: Optional[bool] = None
+    ) -> List:
+        """
+
+        Intersect multiple sorted sets
+
+        :param keys:
+        :param weights:
+        :param aggregate:
+        :param withscores:
+
+        :return: the result of intersection (optionally with their scores, in case
+         the ``withscores`` option is given).
+
+        """
+
+        return await self._zaggregate(
+            "ZINTER", None, keys, weights, aggregate, withscores=withscores
+        )
+
+    @versionchanged(
+        reason="Separated keys and weights into two separate arguments for clarity",
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def zinterstore(
+        self,
+        *keys: str,
+        destination: str,
+        weights: Optional[List[Optional[int]]] = None,
+        aggregate: Optional[Literal[PureToken.SUM, PureToken.MIN, PureToken.MAX]] = None
+    ) -> int:
+        """
+        Intersect multiple sorted sets and store the resulting sorted set in a new key
+
+        :return: the number of elements in the resulting sorted set at ``destination``.
+        """
+
+        return await self._zaggregate(
+            "ZINTERSTORE", destination, keys, weights, aggregate
+        )
+
+    async def zlexcount(self, key: str, min: str, max: str) -> int:
+        """
+        Count the number of members in a sorted set between a given lexicographical range
+
+        :return: the number of elements in the specified score range.
+        """
+
+        return await self.execute_command("ZLEXCOUNT", key, min, max)
+
+    @versionchanged(
+        reason="""
+        :paramref:`members` changed to variable argument list
+        """,
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def zmscore(self, key: str, *members: str) -> Optional[list]:
+        """
+        Get the score associated with the given members in a sorted set
+
+        :param members:
+
+        :return: list of scores or ``None`` associated with the specified ``members``
+         values (a double precision floating point number), represented as strings
+
+        """
+        if not members:
+            raise DataError("ZMSCORE members must be a non-empty list")
+
+        return await self.execute_command("ZMSCORE", key, *members)
+
+    @versionadded(version="2.1.0")
+    async def zpopmax(self, key: str, count: Optional[int] = 1) -> List:
+        """
+        Remove and return members with the highest scores in a sorted set
+
+        :return: list of popped elements and scores.
+        """
+        args = (count is not None) and [count] or []
+        options = {"withscores": True}
+        return await self.execute_command("ZPOPMAX", key, *args, **options)
+
+    @versionadded(version="2.1.0")
+    async def zpopmin(self, key: str, count: Optional[int] = 1) -> List:
+        """
+        Remove and return members with the lowest scores in a sorted set
+
+        :return: list of popped elements and scores.
+        """
+        args = (count is not None) and [count] or []
+        options = {"withscores": True}
+
+        return await self.execute_command("ZPOPMIN", key, *args, **options)
+
+    @versionadded(version="2.1.0")
+    async def zrandmember(
+        self, key: str, count: Optional[int] = None, withscores: Optional[bool] = None
+    ) -> Optional[Union[str, list]]:
+        """
+        Get one or multiple random elements from a sorted set
+
+
+        :return: without the additional ``count`` argument, the command returns a
+         randomly selected element, or ``None`` when ``key`` does not exist.
+
+         If the additional ``count`` argument is passed,
+         the command returns a list of elements, or an empty list when ``key`` does not exist.
+
+         If the ``withscores`` argument is used, the return is a list elements and their scores
+         from the sorted set.
+        """
+        params = []
+
+        if count is not None:
+            params.append(count)
+
+        if withscores:
+            params.append("WITHSCORES")
+
+        return await self.execute_command("ZRANDMEMBER", key, *params)
+
+    @versionchanged(
+        reason="""
+    - Removed ``byscore`` and ``bylex`` and added :paramref:`sortby` parameter to collapse
+      different options
+    - Changed ``desc`` to :paramref:`rev`
+    - Changed ``num`` to :paramref:`count`
+    """,
+        version="3.0.0",
+    )
+    async def zrange(
+        self,
+        key: str,
+        start: str,
+        stop: str,
+        sortby: Optional[Literal[PureToken.BYSCORE, PureToken.BYLEX]] = None,
+        rev: Optional[bool] = None,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+        withscores: Optional[bool] = None,
+    ) -> List:
+        """
+
+        Return a range of members in a sorted set
+
+        :return: list of elements in the specified range (optionally with their scores, in case
+         the ``withscores`` argument is given).
+        """
+        # if not byscore and not bylex and (offset is None and num is None) and desc:
+        #    return self.zrevrange(key, start, end, withscores, score_cast_func)
+
+        return await self._zrange(
+            "ZRANGE",
+            None,
+            key,
+            start,
+            stop,
+            rev,
+            sortby,
+            withscores,
+            offset,
+            count,
+        )
+
+    @versionchanged(
+        reason="""
+        - Changed ``num` to :paramref:`count`
+        - Added :paramref:`offset`
+        """,
+        version="3.0.0",
+    )
+    async def zrangebylex(
+        self,
+        key: str,
+        min: str,
+        max: str,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> List:
+        """
+
+        Return a range of members in a sorted set, by lexicographical range
+
+        :return: list of elements in the specified score range.
+        """
+
+        if (offset is not None and count is None) or (
+            count is not None and offset is None
+        ):
+            raise RedisError("``offset`` and ``count`` must both be specified")
+        pieces = ["ZRANGEBYLEX", key, min, max]
+
+        if offset is not None and count is not None:
+            pieces.extend([b("LIMIT"), offset, count])
+
+        return await self.execute_command(*pieces)
+
+    @versionchanged(
+        reason="""
+        - Removed ``score_cast_func``
+        - Changed ``num` to :paramref:`count`
+        - Changed ``start` to :paramref:`offset`
+        """,
+        version="3.0.0",
+    )
+    async def zrangebyscore(
+        self,
+        key: str,
+        min: float,
+        max: float,
+        withscores: Optional[bool] = None,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> List:
+        """
+
+        Return a range of members in a sorted set, by score
+
+        :return: list of elements in the specified score range (optionally with their scores).
+        """
+
+        if (offset is not None and count is None) or (
+            count is not None and offset is None
+        ):
+            raise RedisError("``offset`` and ``count`` must both be specified")
+        pieces = ["ZRANGEBYSCORE", key, min, max]
+
+        if offset is not None and count is not None:
+            pieces.extend([b("LIMIT"), offset, count])
+
+        if withscores:
+            pieces.append(b("WITHSCORES"))
+        options = {"withscores": withscores}
+
+        return await self.execute_command(*pieces, **options)
+
+    @versionadded(version="2.1.0")
+    async def zrangestore(
+        self,
+        dst: str,
+        src: str,
+        min: str,
+        max: str,
+        sortby: Optional[Literal[PureToken.BYSCORE, PureToken.BYLEX]] = None,
+        rev: Optional[bool] = None,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> int:
+        """
+        Store a range of members from sorted set into another key
+
+        :return: the number of elements in the resulting sorted set
+        """
+
+        return await self._zrange(
+            "ZRANGESTORE",
+            dst,
+            src,
+            min,
+            max,
+            rev,
+            sortby,
+            False,
+            offset,
+            count,
+        )
+
+    async def zrank(self, key: str, member: str) -> Optional[int]:
+        """
+        Determine the index of a member in a sorted set
+
+        :return: the rank of ``member``
+        """
+
+        return await self.execute_command("ZRANK", key, member)
+
+    async def zrem(self, key: str, *members: str) -> int:
+        """
+        Remove one or more members from a sorted set
+
+        :return: The number of members removed from the sorted set, not including non existing
+         members.
+        """
+
+        return await self.execute_command("ZREM", key, *members)
+
+    async def zremrangebylex(self, key: str, min: str, max: str) -> int:
+        """
+        Remove all members in a sorted set between the given lexicographical range
+
+        :return: the number of elements removed.
+        """
+
+        return await self.execute_command("ZREMRANGEBYLEX", key, min, max)
+
+    async def zremrangebyrank(self, key: str, start: int, stop: int) -> int:
+        """
+        Remove all members in a sorted set within the given indexes
+
+        :return: the number of elements removed.
+        """
+
+        return await self.execute_command("ZREMRANGEBYRANK", key, start, stop)
+
+    async def zremrangebyscore(self, key: str, min: float, max: float) -> int:
+        """
+        Remove all members in a sorted set within the given scores
+
+        :return: the number of elements removed.
+        """
+
+        return await self.execute_command("ZREMRANGEBYSCORE", key, min, max)
+
+    @versionchanged(
+        reason="""
+        - Removed ``score_cast_func``
+        - Renamed ``end`` to :paramref:``stop``
+        """,
+        version="3.0.0",
+    )
+    async def zrevrange(
+        self, key: str, start: int, stop: int, withscores: Optional[bool] = None
+    ) -> List:
+        """
+
+        Return a range of members in a sorted set, by index, with scores ordered from
+        high to low
+
+        :return: list of elements in the specified range (optionally with their scores).
+        """
+        pieces = ["ZREVRANGE", key, start, stop]
+
+        if withscores:
+            pieces.append(b("WITHSCORES"))
+        options = {"withscores": withscores}
+
+        return await self.execute_command(*pieces, **options)
+
+    @versionchanged(
+        reason="""
+        - Renamed ``start`` to :paramref:``offset``
+        - Renamed ``num`` to :paramref:``count``
+        """,
+        version="3.0.0",
+    )
+    async def zrevrangebylex(
+        self,
+        key: str,
+        max: str,
+        min: str,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> List:
+        """
+
+        Return a range of members in a sorted set, by lexicographical range, ordered from
+        higher to lower strings.
+
+        :return: list of elements in the specified score range
+        """
+
+        if (offset is not None and count is None) or (
+            count is not None and offset is None
+        ):
+            raise RedisError("``offset`` and ``count`` must both be specified")
+        pieces = ["ZREVRANGEBYLEX", key, max, min]
+
+        if offset is not None and count is not None:
+            pieces.extend([b("LIMIT"), offset, count])
+
+        return await self.execute_command(*pieces)
+
+    @versionchanged(
+        reason="""
+        - Renamed ``start`` to :paramref:``offset``
+        - Renamed ``num`` to :paramref:``count``
+        - Removed ``score_cast_func``
+        """,
+        version="3.0.0",
+    )
+    async def zrevrangebyscore(
+        self,
+        key: str,
+        max: float,
+        min: float,
+        withscores: Optional[bool] = None,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> List:
+        """
+
+        Return a range of members in a sorted set, by score, with scores ordered from high to low
+
+        :return: list of elements in the specified score range (optionally with their scores)
+        """
+
+        if (offset is not None and count is None) or (
+            count is not None and offset is None
+        ):
+            raise RedisError("``offset`` and ``count`` must both be specified")
+        pieces = ["ZREVRANGEBYSCORE", key, max, min]
+
+        if offset is not None and count is not None:
+            pieces.extend([b("LIMIT"), offset, count])
+
+        if withscores:
+            pieces.append(b("WITHSCORES"))
+        options = {"withscores": withscores}
+
+        return await self.execute_command(*pieces, **options)
+
+    async def zrevrank(self, key: str, member: str) -> Optional[Union[str, int]]:
+        """
+        Determine the index of a member in a sorted set, with scores ordered from high to low
+
+        :return: the rank of ``member``
+        """
+
+        return await self.execute_command("ZREVRANK", key, member)
+
+    @versionchanged(
+        reason="""
+        - Removed ``score_cast_func``
+        """,
+        version="3.0.0",
+    )
+    async def zscan(
+        self,
+        key: str,
+        cursor: int = 1,
+        match: Optional[str] = None,
+        count: Optional[int] = None,
+    ):
+        """
+        Incrementally iterate sorted sets elements and associated scores
+
+        """
+        pieces = [key, cursor]
+
+        if match is not None:
+            pieces.extend([b("MATCH"), match])
+
+        if count is not None:
+            pieces.extend([b("COUNT"), count])
+        return await self.execute_command("ZSCAN", *pieces)
+
+    async def zscore(self, key: str, member: str) -> str:
+        """
+        Get the score associated with the given member in a sorted set
+
+        :return: the score of ``member`` (a double precision floating point number),
+         represented as string.
+        """
+
+        return await self.execute_command("ZSCORE", key, member)
+
+    @versionchanged(
+        reason="""
+        - Separated keys and weights into two separate arguments for clarity,
+        - Changed :paramref:`aggregate` to :class:`PureToken`
+        """,
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def zunion(
+        self,
+        *keys: str,
+        weights: Optional[List[Optional[int]]] = None,
+        aggregate: Optional[
+            Literal[PureToken.SUM, PureToken.MIN, PureToken.MAX]
+        ] = None,
+        withscores: Optional[bool] = None
+    ) -> List:
+        """
+
+        Add multiple sorted sets
+
+        :return: the result of union (optionally with their scores, in case the ``withscores``
+         argument is given).
+        """
+
+        return await self._zaggregate(
+            "ZUNION", None, keys, weights, aggregate, withscores=withscores
+        )
+
+    @versionchanged(
+        reason="""
+        - Separated keys and weights into two separate arguments for clarity,
+        - Changed :paramref:`aggregate` to :class:`PureToken`
+        - Renamed ``dest`` to :paramref:`destination`
+        """,
+        version="3.0.0",
+    )
+    async def zunionstore(
+        self,
+        *keys: str,
+        destination: str,
+        weights: Optional[List[Optional[int]]] = None,
+        aggregate: Optional[Literal[PureToken.SUM, PureToken.MIN, PureToken.MAX]] = None
+    ) -> int:
+        """
+        Add multiple sorted sets and store the resulting sorted set in a new key
+
+        :return: the number of elements in the resulting sorted set at ``destination``.
+        """
+
+        return await self._zaggregate(
+            "ZUNIONSTORE", destination, keys, weights, aggregate
+        )
+
+    @deprecated(
+        reason="Use :meth:`zadd` with the appropriate options instead", version="3.0.0"
+    )
     async def zaddoption(self, key, option=None, *args, **kwargs):
         """
         Differs from zadd in that you can set either 'XX' or 'NX' option as
@@ -108,6 +776,7 @@ class SortedSetCommandMixin(CommandMixin):
         The following example would add four values to the 'my-key' key:
         redis.zaddoption('my-key', 'XX', 1.1, 'name1', 2.2, 'name2', name3=3.3, name4=4.4)
         redis.zaddoption('my-key', 'NX CH', name1=2.2)
+
         """
 
         if not option:
@@ -138,197 +807,26 @@ class SortedSetCommandMixin(CommandMixin):
 
         return await self.execute_command("ZADD", key, *pieces, *members)
 
-    async def zcard(self, key):
-        """Returns the number of elements in the sorted set ``key``"""
-
-        return await self.execute_command("ZCARD", key)
-
-    async def zcount(self, key, min, max):
-        """
-        Returns the number of elements in the sorted set at key ``key`` with
-        a score between ``min`` and ``max``.
-        """
-
-        return await self.execute_command("ZCOUNT", key, min, max)
-
-    async def zdiff(self, keys, withscores=False):
-        """
-        Returns the difference between the first and all successive input
-        sorted sets provided in ``keys``.
-
-        .. versionadded:: 2.1.0
-        """
-        pieces = [len(keys), *keys]
-
-        if withscores:
-            pieces.append("WITHSCORES")
-
-        return await self.execute_command("ZDIFF", *pieces)
-
-    async def zdiffstore(self, destination, keys):
-        """
-        Computes the difference between the first and all successive input
-        sorted sets provided in ``keys`` and stores the result in ``destination``.
-
-        .. versionadded:: 2.1.0
-        """
-        pieces = [len(keys), *keys]
-
-        return await self.execute_command("ZDIFFSTORE", destination, *pieces)
-
-    async def zincrby(self, key, value, amount=1):
-        """
-        Increments the score of ``value`` in sorted set ``key`` by ``amount``
-        """
-
-        return await self.execute_command("ZINCRBY", key, amount, value)
-
-    async def zinter(self, keys, aggregate=None, withscores=False):
-        """
-        Return the intersect of multiple sorted sets specified by ``keys``.
-        With the ``aggregate`` option, it is possible to specify how the
-        results of the union are aggregated. This option defaults to SUM,
-        where the score of an element is summed across the inputs where it
-        exists. When this option is set to either MIN or MAX, the resulting
-        set will contain the minimum or maximum score of an element across
-        the inputs where it exists.
-
-        .. versionadded:: 2.1.0
-        """
-
-        return await self._zaggregate(
-            "ZINTER", None, keys, aggregate, withscores=withscores
-        )
-
-    async def zinterstore(self, dest, keys, aggregate=None):
-        """
-        Intersects multiple sorted sets specified by ``keys`` into
-        a new sorted set, ``dest``. Scores in the destination will be
-        aggregated based on the ``aggregate``, or SUM if none is provided.
-
-        .. versionadded:: 2.1.0
-        """
-
-        return await self._zaggregate("ZINTERSTORE", dest, keys, aggregate)
-
-    async def zlexcount(self, key, min, max):
-        """
-        Returns the number of items in the sorted set ``key`` between the
-        lexicographical range ``min`` and ``max``.
-        """
-
-        return await self.execute_command("ZLEXCOUNT", key, min, max)
-
-    async def zpopmax(self, key, count=None):
-        """
-        Remove and return up to ``count`` members with the highest scores
-        from the sorted set ``key``.
-
-        .. versionadded:: 2.1.0
-        """
-        args = (count is not None) and [count] or []
-        options = {"withscores": True}
-
-        return await self.execute_command("ZPOPMAX", key, *args, **options)
-
-    async def zpopmin(self, key, count=None):
-        """
-        Remove and return up to ``count`` members with the lowest scores
-        from the sorted set ``key``.
-
-        .. versionadded:: 2.1.0
-        """
-        args = (count is not None) and [count] or []
-        options = {"withscores": True}
-
-        return await self.execute_command("ZPOPMIN", key, *args, **options)
-
-    async def zrandmember(self, key, count=None, withscores=False):
-        """
-        Return a random element from the sorted set value stored at key.
-        ``count`` if the argument is positive, return an array of distinct
-        fields. If called with a negative count, the behavior changes and
-        the command is allowed to return the same field multiple times.
-        In this case, the number of returned fields is the absolute value
-        of the specified count.
-        ``withscores`` The optional WITHSCORES modifier changes the reply so it
-        includes the respective scores of the randomly selected elements from
-        the sorted set.
-
-        .. versionadded:: 2.1.0
-        """
-        params = []
-
-        if count is not None:
-            params.append(count)
-
-        if withscores:
-            params.append("WITHSCORES")
-
-        return await self.execute_command("ZRANDMEMBER", key, *params)
-
-    async def bzpopmax(self, keys, timeout=0):
-        """
-        ZPOPMAX a value off of the first non-empty sorted set
-        named in the ``keys`` list.
-        If none of the sorted sets in ``keys`` has a value to ZPOPMAX,
-        then block for ``timeout`` seconds, or until a member gets added
-        to one of the sorted sets.
-        If timeout is 0, then block indefinitely.
-
-        .. versionadded:: 2.1.0
-        """
-
-        if timeout is None:
-            timeout = 0
-        keys = list_or_args(keys, None)
-        keys.append(timeout)
-
-        return await self.execute_command("BZPOPMAX", *keys)
-
-    async def bzpopmin(self, keys, timeout=0):
-        """
-        ZPOPMIN a value off of the first non-empty sorted set
-        named in the ``keys`` list.
-        If none of the sorted sets in ``keys`` has a value to ZPOPMIN,
-        then block for ``timeout`` seconds, or until a member gets added
-        to one of the sorted sets.
-        If timeout is 0, then block indefinitely.
-
-        .. versionadded:: 2.1.0
-        """
-
-        if timeout is None:
-            timeout = 0
-        keys = list_or_args(keys, None)
-        keys.append(timeout)
-
-        return await self.execute_command("BZPOPMIN", *keys)
-
+    # Private methods
     async def _zrange(
         self,
         command,
         dest,
         key,
         start,
-        end,
-        desc=False,
-        byscore=False,
-        bylex=False,
+        stop,
+        rev=None,
+        sortby: PureToken = None,
         withscores=False,
-        score_cast_func=float,
         offset=None,
-        num=None,
+        count=None,
     ):
-        if byscore and bylex:
-            raise DataError(
-                "``byscore`` and ``bylex`` can not be " "specified together."
-            )
+        if (offset is not None and count is None) or (
+            count is not None and offset is None
+        ):
+            raise DataError("``offset`` and ``count`` must both be specified.")
 
-        if (offset is not None and num is None) or (num is not None and offset is None):
-            raise DataError("``offset`` and ``num`` must both be specified.")
-
-        if bylex and withscores:
+        if sortby == PureToken.BYLEX and withscores:
             raise DataError(
                 "``withscores`` not supported in combination " "with ``bylex``."
             )
@@ -336,389 +834,50 @@ class SortedSetCommandMixin(CommandMixin):
 
         if dest:
             pieces.append(dest)
-        pieces.extend([key, start, end])
+        pieces.extend([key, start, stop])
 
-        if byscore:
-            pieces.append("BYSCORE")
+        if sortby:
+            pieces.append(sortby.value)
 
-        if bylex:
-            pieces.append("BYLEX")
-
-        if desc:
+        if rev is not None:
             pieces.append("REV")
 
-        if offset is not None and num is not None:
-            pieces.extend(["LIMIT", offset, num])
+        if offset is not None and count is not None:
+            pieces.extend(["LIMIT", offset, count])
 
         if withscores:
             pieces.append("WITHSCORES")
-        options = {"withscores": withscores, "score_cast_func": score_cast_func}
+        options = {"withscores": withscores}
 
         return await self.execute_command(*pieces, **options)
 
-    async def zrange(
+    async def _zaggregate(
         self,
-        key,
-        start,
-        end,
-        desc=False,
-        withscores=False,
-        score_cast_func=float,
-        byscore=False,
-        bylex=False,
-        offset=None,
-        num=None,
+        command,
+        destination: str,
+        keys: List[str],
+        weights: List[int],
+        aggregate: PureToken = None,
+        withscores: bool = None,
     ):
-        """
-        Return a range of values from sorted set ``key`` between
-        ``start`` and ``end`` sorted in ascending order.
-        ``start`` and ``end`` can be negative, indicating the end of the range.
-        ``desc`` a boolean indicating whether to sort the results in reversed
-        order.
-        ``withscores`` indicates to return the scores along with the values.
-        The return type is a list of (value, score) pairs.
-        ``score_cast_func`` a callable used to cast the score return value.
-        ``byscore`` when set to True, returns the range of elements from the
-        sorted set having scores equal or between ``start`` and ``end``.
-        ``bylex`` when set to True, returns the range of elements from the
-        sorted set between the ``start`` and ``end`` lexicographical closed
-        range intervals.
-        Valid ``start`` and ``end`` must start with ( or [, in order to specify
-        whether the range interval is exclusive or inclusive, respectively.
-        ``offset`` and ``num`` are specified, then return a slice of the range.
-        Can't be provided when using ``bylex``.
-        For more information check https://redis.io/commands/zrange
-        """
-        # Need to support ``desc`` also when using old redis version
-        # because it was supported in 3.5.3 (of redis-py)
-
-        if not byscore and not bylex and (offset is None and num is None) and desc:
-            return self.zrevrange(key, start, end, withscores, score_cast_func)
-
-        return await self._zrange(
-            "ZRANGE",
-            None,
-            key,
-            start,
-            end,
-            desc,
-            byscore,
-            bylex,
-            withscores,
-            score_cast_func,
-            offset,
-            num,
-        )
-
-    async def zrangebylex(self, key, min, max, start=None, num=None):
-        """
-        Returns the lexicographical range of values from sorted set ``key``
-        between ``min`` and ``max``.
-
-        If ``start`` and ``num`` are specified, then return a slice of the
-        range.
-        """
-
-        if (start is not None and num is None) or (num is not None and start is None):
-            raise RedisError("``start`` and ``num`` must both be specified")
-        pieces = ["ZRANGEBYLEX", key, min, max]
-
-        if start is not None and num is not None:
-            pieces.extend([b("LIMIT"), start, num])
-
-        return await self.execute_command(*pieces)
-
-    async def zrevrangebylex(self, key, max, min, start=None, num=None):
-        """
-        Returns the reversed lexicographical range of values from sorted set
-        ``key`` between ``max`` and ``min``.
-
-        If ``start`` and ``num`` are specified, then return a slice of the
-        range.
-        """
-
-        if (start is not None and num is None) or (num is not None and start is None):
-            raise RedisError("``start`` and ``num`` must both be specified")
-        pieces = ["ZREVRANGEBYLEX", key, max, min]
-
-        if start is not None and num is not None:
-            pieces.extend([b("LIMIT"), start, num])
-
-        return await self.execute_command(*pieces)
-
-    async def zrangebyscore(
-        self,
-        key,
-        min,
-        max,
-        start=None,
-        num=None,
-        withscores=False,
-        score_cast_func=float,
-    ):
-        """
-        Returns a range of values from the sorted set ``key`` with scores
-        between ``min`` and ``max``.
-
-        If ``start`` and ``num`` are specified, then return a slice
-        of the range.
-
-        ``withscores`` indicates to return the scores along with the values.
-        The return type is a list of (value, score) pairs
-
-        `score_cast_func`` a callable used to cast the score return value
-        """
-
-        if (start is not None and num is None) or (num is not None and start is None):
-            raise RedisError("``start`` and ``num`` must both be specified")
-        pieces = ["ZRANGEBYSCORE", key, min, max]
-
-        if start is not None and num is not None:
-            pieces.extend([b("LIMIT"), start, num])
-
-        if withscores:
-            pieces.append(b("WITHSCORES"))
-        options = {"withscores": withscores, "score_cast_func": score_cast_func}
-
-        return await self.execute_command(*pieces, **options)
-
-    async def zrank(self, key, member):
-        """
-        Returns a 0-based value indicating the rank of ``member`` in sorted set
-        ``key``
-        """
-
-        return await self.execute_command("ZRANK", key, member)
-
-    async def zrem(self, key, *members):
-        """Removes member ``members`` from sorted set ``key``"""
-
-        return await self.execute_command("ZREM", key, *members)
-
-    async def zremrangebylex(self, key, min, max):
-        """
-        Removes all elements in the sorted set ``key`` between the
-        lexicographical range specified by ``min`` and ``max``.
-
-        Returns the number of elements removed.
-        """
-
-        return await self.execute_command("ZREMRANGEBYLEX", key, min, max)
-
-    async def zremrangebyrank(self, key, start, stop):
-        """
-        Removes all elements in the sorted set ``key`` with ranks between
-        ``start`` and ``stop``. Values are 0-based, ordered from smallest score
-        to largest. Values can be negative indicating the highest scores.
-        Returns the number of elements removed
-        """
-
-        return await self.execute_command("ZREMRANGEBYRANK", key, start, stop)
-
-    async def zremrangebyscore(self, key, min, max):
-        """
-        Removes all elements in the sorted set ``key`` with scores
-        between ``min`` and ``max``. Returns the number of elements removed.
-        """
-
-        return await self.execute_command("ZREMRANGEBYSCORE", key, min, max)
-
-    async def zrevrange(self, key, start, end, withscores=False, score_cast_func=float):
-        """
-        Returns a range of values from sorted set ``key`` between
-        ``start`` and ``end`` sorted in descending order.
-
-        ``start`` and ``end`` can be negative, indicating the end of the range.
-
-        ``withscores`` indicates to return the scores along with the values
-        The return type is a list of (value, score) pairs
-
-        ``score_cast_func`` a callable used to cast the score return value
-        """
-        pieces = ["ZREVRANGE", key, start, end]
-
-        if withscores:
-            pieces.append(b("WITHSCORES"))
-        options = {"withscores": withscores, "score_cast_func": score_cast_func}
-
-        return await self.execute_command(*pieces, **options)
-
-    async def zrangestore(
-        self,
-        dest,
-        key,
-        start,
-        end,
-        byscore=False,
-        bylex=False,
-        desc=False,
-        offset=None,
-        num=None,
-    ):
-        """
-        Stores in ``dest`` the result of a range of values from sorted set
-        ``key`` between ``start`` and ``end`` sorted in ascending order.
-        ``start`` and ``end`` can be negative, indicating the end of the range.
-        ``byscore`` when set to True, returns the range of elements from the
-        sorted set having scores equal or between ``start`` and ``end``.
-        ``bylex`` when set to True, returns the range of elements from the
-        sorted set between the ``start`` and ``end`` lexicographical closed
-        range intervals.
-        Valid ``start`` and ``end`` must start with ( or [, in order to specify
-        whether the range interval is exclusive or inclusive, respectively.
-        ``desc`` a boolean indicating whether to sort the results in reversed
-        order.
-        ``offset`` and ``num`` are specified, then return a slice of the range.
-        Can't be provided when using ``bylex``.
-
-        .. versionadded:: 2.1.0
-        """
-
-        return await self._zrange(
-            "ZRANGESTORE",
-            dest,
-            key,
-            start,
-            end,
-            desc,
-            byscore,
-            bylex,
-            False,
-            None,
-            offset,
-            num,
-        )
-
-    async def zrevrangebyscore(
-        self,
-        key,
-        max,
-        min,
-        start=None,
-        num=None,
-        withscores=False,
-        score_cast_func=float,
-    ):
-        """
-        Returns a range of values from the sorted set ``key`` with scores
-        between ``min`` and ``max`` in descending order.
-
-        If ``start`` and ``num`` are specified, then return a slice
-        of the range.
-
-        ``withscores`` indicates to return the scores along with the values.
-        The return type is a list of (value, score) pairs
-
-        ``score_cast_func`` a callable used to cast the score return value
-        """
-
-        if (start is not None and num is None) or (num is not None and start is None):
-            raise RedisError("``start`` and ``num`` must both be specified")
-        pieces = ["ZREVRANGEBYSCORE", key, max, min]
-
-        if start is not None and num is not None:
-            pieces.extend([b("LIMIT"), start, num])
-
-        if withscores:
-            pieces.append(b("WITHSCORES"))
-        options = {"withscores": withscores, "score_cast_func": score_cast_func}
-
-        return await self.execute_command(*pieces, **options)
-
-    async def zrevrank(self, key, member):
-        """
-        Returns a 0-based value indicating the descending rank of
-        ``member`` in sorted set ``key``
-        """
-
-        return await self.execute_command("ZREVRANK", key, member)
-
-    async def zscore(self, key, member):
-        "Return the score of element ``member`` in sorted set ``key``"
-
-        return await self.execute_command("ZSCORE", key, member)
-
-    async def zunion(self, keys, aggregate=None, withscores=False):
-        """
-        Return the union of multiple sorted sets specified by ``keys``.
-        ``keys`` can be provided as dictionary of keys and their weights.
-        Scores will be aggregated based on the ``aggregate``, or SUM if
-        none is provided.
-
-        .. versionadded:: 2.1.0
-        """
-
-        return await self._zaggregate(
-            "ZUNION", None, keys, aggregate, withscores=withscores
-        )
-
-    async def zunionstore(self, dest, keys, aggregate=None):
-        """
-        Performs Union on multiple sorted sets specified by ``keys`` into
-        a new sorted set, ``dest``. Scores in the destination will be
-        aggregated based on the ``aggregate``, or SUM if none is provided.
-        """
-
-        return await self._zaggregate("ZUNIONSTORE", dest, keys, aggregate)
-
-    async def zmscore(self, key, members):
-        """
-        Returns the scores associated with the specified members
-        in the sorted set stored at key.
-        ``members`` should be a list of the member name.
-        Return type is a list of score.
-        If the member does not exist, a None will be returned
-        in corresponding position.
-
-        .. versionadded:: 2.1.0
-        """
-
-        if not members:
-            raise DataError("ZMSCORE members must be a non-empty list")
-        pieces = [key] + members
-
-        return await self.execute_command("ZMSCORE", *pieces)
-
-    async def _zaggregate(self, command, dest, keys, aggregate=None):
-        pieces = [command, dest, len(keys)]
-
-        if isinstance(keys, dict):
-            keys, weights = iterkeys(keys), itervalues(keys)
-        else:
-            weights = None
+        pieces = [command]
+        if destination:
+            pieces.append(destination)
+        pieces.append(len(keys))
         pieces.extend(keys)
-
+        options = {}
         if weights:
             pieces.append(b("WEIGHTS"))
             pieces.extend(weights)
 
         if aggregate:
             pieces.append(b("AGGREGATE"))
-            pieces.append(aggregate)
+            pieces.append(aggregate.value)
 
-        return await self.execute_command(*pieces)
-
-    async def zscan(self, key, cursor=0, match=None, count=None, score_cast_func=float):
-        """
-        Incrementally returns lists of elements in a sorted set. Also returns
-        a cursor pointing to the scan position.
-
-        ``match`` allows for filtering the keys by pattern
-
-        ``count`` allows for hint the minimum number of returns
-
-        ``score_cast_func`` a callable used to cast the score return value
-        """
-        pieces = [key, cursor]
-
-        if match is not None:
-            pieces.extend([b("MATCH"), match])
-
-        if count is not None:
-            pieces.extend([b("COUNT"), count])
-        options = {"score_cast_func": score_cast_func}
-
-        return await self.execute_command("ZSCAN", *pieces, **options)
+        if withscores is not None:
+            pieces.append(b("WITHSCORES"))
+            options = {"withscores": True}
+        return await self.execute_command(*pieces, **options)
 
 
 class ClusterSortedSetCommandMixin(SortedSetCommandMixin):

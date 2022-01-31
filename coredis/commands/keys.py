@@ -1,7 +1,10 @@
 import datetime
-import time as mod_time
+from typing import List, Literal, Optional, Union
 
-from coredis.exceptions import DataError, RedisError, ResponseError
+from deprecated.sphinx import deprecated, versionadded, versionchanged
+
+from coredis.exceptions import ResponseError
+from coredis.tokens import PureToken
 from coredis.utils import (
     NodeFlag,
     b,
@@ -11,23 +14,16 @@ from coredis.utils import (
     int_or_none,
     list_keys_to_dict,
     merge_result,
+    nativestr,
+    normalized_milliseconds,
+    normalized_seconds,
+    normalized_time_milliseconds,
+    normalized_time_seconds,
     string_keys_to_dict,
 )
+from coredis.validators import mutually_inclusive_parameters
 
 from . import CommandMixin
-
-
-def sort_return_tuples(response, **options):
-    """
-    If ``groups`` is specified, return the response as a list of
-    n-element tuples with n being the value found in options['groups']
-    """
-
-    if not response or not options["groups"]:
-        return response
-    n = options["groups"]
-
-    return list(zip(*[response[i::n] for i in range(n)]))
 
 
 def parse_object(response, infotype):
@@ -50,216 +46,338 @@ class KeysCommandMixin(CommandMixin):
     RESPONSE_CALLBACKS = dict_merge(
         string_keys_to_dict("EXISTS EXPIRE EXPIREAT " "MOVE PERSIST RENAMENX", bool),
         {
+            "COPY MOVE PERSIST": bool,
             "DEL": int,
-            "SORT": sort_return_tuples,
             "OBJECT": parse_object,
             "RANDOMKEY": lambda r: r and r or None,
             "SCAN": parse_scan,
             "RENAME": bool_ok,
+            "MIGRATE": lambda r: nativestr(r) != "NOKEY",
         },
     )
 
-    async def delete(self, *keys):
-        """Delete one or more keys specified by ``keys``"""
+    @versionadded(version="3.0.0")
+    async def copy(
+        self,
+        source: str,
+        destination: str,
+        db: Optional[int] = None,
+        replace: Optional[bool] = None,
+    ) -> bool:
+        """
+        Copy a key
+        """
+        pieces = []
+
+        if db is not None:
+            pieces.extend(["DB", db])
+
+        if replace:
+            pieces.append("REPLACE")
+
+        return await self.execute_command("COPY", source, destination, *pieces)
+
+    async def delete(self, *keys: str) -> int:
+        """
+        Delete one or more keys specified by ``keys``
+
+        :return: The number of keys that were removed.
+        """
 
         return await self.execute_command("DEL", *keys)
 
-    async def dump(self, key):
+    async def dump(self, key: str) -> str:
         """
         Return a serialized version of the value stored at the specified key.
-        If key does not exist a nil bulk reply is returned.
+
+        :return: the serialized value
         """
 
         return await self.execute_command("DUMP", key)
 
-    async def object_encoding(self, key):
+    async def exists(self, *keys: str) -> int:
+        """
+        Determine if a key exists
+
+        :return: the number of keys that exist from those specified as arguments.
+        """
+
+        return await self.execute_command("EXISTS", *keys)
+
+    async def expire(self, key: str, seconds: Union[int, datetime.timedelta]) -> bool:
+        """
+        Set a key's time to live in seconds
+
+
+
+        :return: if the timeout was set or not set.
+         e.g. key doesn't exist, or operation skipped due to the provided arguments.
+        """
+
+        return await self.execute_command("EXPIRE", key, normalized_seconds(seconds))
+
+    async def expireat(
+        self, key: str, timestamp: Union[int, datetime.datetime]
+    ) -> bool:
+        """
+        Set the expiration for a key to a specific time
+
+
+        :return: if the timeout was set or no.
+         e.g. key doesn't exist, or operation skipped due to the provided arguments.
+
+        """
+
+        return await self.execute_command(
+            "EXPIREAT", key, normalized_time_seconds(timestamp)
+        )
+
+    async def keys(self, pattern: str = "*") -> list:
+        """
+        Find all keys matching the given pattern
+
+        :return: list of keys matching ``pattern``.
+        """
+
+        return await self.execute_command("KEYS", pattern)
+
+    @versionadded(version="3.0.0")
+    @mutually_inclusive_parameters("username", "password")
+    async def migrate(
+        self,
+        keys: List[str],
+        host: str,
+        port: str,
+        destination_db: int,
+        timeout: int,
+        copy: Optional[bool] = None,
+        replace: Optional[bool] = None,
+        auth: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> bool:
+        """
+        Atomically transfer key(s) from a Redis instance to another one.
+
+
+        :return: If all keys were found found in the source instance.
+        """
+
+        if not keys:
+            raise DataError("MIGRATE requires at least one key")
+        pieces = []
+
+        if copy:
+            pieces.append(b"COPY")
+
+        if replace:
+            pieces.append(b"REPLACE")
+
+        if auth:
+            pieces.append(b"AUTH")
+            pieces.append(auth)
+
+        if username and password:
+            pieces.append(b"AUTH2")
+            pieces.append(username)
+            pieces.append(password)
+
+        pieces.append(b"KEYS")
+        pieces.extend(keys)
+
+        return await self.execute_command(
+            "MIGRATE", host, port, "", destination_db, timeout, *pieces
+        )
+
+    async def move(self, key: str, db: int) -> bool:
+        """Move a key to another database"""
+
+        return await self.execute_command("MOVE", key, db)
+
+    @versionadded(version="2.1.0")
+    async def object_encoding(self, key: str) -> Optional[str]:
         """
         Return the internal encoding for the object stored at ``key``
 
-        .. versionadded:: 2.1.0
+        :return: the encoding of the object, or ``None`` if the key doesn't exist
         """
 
         return await self.execute_command("OBJECT ENCODING", key)
 
-    async def object_freq(self, key):
+    @versionadded(version="2.1.0")
+    async def object_freq(self, key: str) -> int:
         """
         Return the logarithmic access frequency counter for the object
         stored at ``key``
 
-        .. versionadded:: 2.1.0
+        :return: The counter's value.
         """
 
         return await self.execute_command("OBJECT FREQ", key)
 
-    async def object_idletime(self, key):
+    @versionadded(version="2.1.0")
+    async def object_idletime(self, key: str) -> int:
         """
         Return the time in seconds since the last access to the object
         stored at ``key``
 
-        .. versionadded:: 2.1.0
+        :return: The idle time in seconds.
         """
 
         return await self.execute_command("OBJECT IDLETIME", key)
 
-    async def object_refcount(self, key):
+    @versionadded(version="2.1.0")
+    async def object_refcount(self, key: str) -> int:
         """
         Return the reference count of the object stored at ``key``
 
-        .. versionadded:: 2.1.0
+        :return: The number of references.
         """
 
         return await self.execute_command("OBJECT REFCOUNT", key)
 
-    async def exists(self, *keys):
-        """Returns a count indicating the number of keys in ``keys`` that exist"""
+    @deprecated(
+        reason="""
+            Use explicit methods:
 
-        return await self.execute_command("EXISTS", *keys)
-
-    async def expire(self, key, seconds):
-        """
-        Set an expire flag on key ``key`` for ``seconds`` seconds. ``seconds``
-        can be represented by an integer or a Python timedelta object.
-        """
-
-        if isinstance(seconds, datetime.timedelta):
-            seconds = seconds.seconds + seconds.days * 24 * 3600
-
-        return await self.execute_command("EXPIRE", key, seconds)
-
-    async def expireat(self, key, timestamp):
-        """
-        Set an expire flag on key ``key``. ``timestamp`` can be represented
-        as an integer indicating unix time or a Python datetime object.
-        """
-
-        if isinstance(timestamp, datetime.datetime):
-            timestamp = int(mod_time.mktime(timestamp.timetuple()))
-
-        return await self.execute_command("EXPIREAT", key, timestamp)
-
-    async def keys(self, pattern="*"):
-        """Returns a list of keys matching ``pattern``"""
-
-        return await self.execute_command("KEYS", pattern)
-
-    async def move(self, key, db):
-        """Moves the key ``key`` to a different Redis database ``db``"""
-
-        return await self.execute_command("MOVE", key, db)
-
+                - :meth:`object_encoding`
+                - :meth:`object_freq`
+                - :meth:`object_idletime`
+                - :meth:`object_refcount`
+            """,
+        version="3.0.0",
+    )
     async def object(self, infotype, key):
         """Returns the encoding, idletime, or refcount about the key"""
 
         return await self.execute_command("OBJECT", infotype, key, infotype=infotype)
 
-    async def persist(self, key):
+    async def persist(self, key: str) -> bool:
         """Removes an expiration on ``key``"""
 
         return await self.execute_command("PERSIST", key)
 
-    async def pexpire(self, key, milliseconds):
+    async def pexpire(
+        self, key: str, milliseconds: Union[int, datetime.timedelta]
+    ) -> int:
         """
-        Set an expire flag on key ``key`` for ``milliseconds`` milliseconds.
-        ``milliseconds`` can be represented by an integer or a Python timedelta
-        object.
-        """
+        Set a key's time to live in milliseconds
 
-        if isinstance(milliseconds, datetime.timedelta):
-            ms = int(milliseconds.microseconds / 1000)
-            milliseconds = (
-                milliseconds.seconds + milliseconds.days * 24 * 3600
-            ) * 1000 + ms
-
-        return await self.execute_command("PEXPIRE", key, milliseconds)
-
-    async def pexpireat(self, key, timestamp):
-        """
-        Set an expire flag on key ``key``. ``timestamp`` can be represented
-        as an integer representing unix time in milliseconds (unix time * 1000)
-        or a Python datetime object.
+        :return: if the timeout was set or not.
+         e.g. key doesn't exist, or operation skipped due to the provided arguments.
         """
 
-        if isinstance(timestamp, datetime.datetime):
-            ms = int(timestamp.microsecond / 1000)
-            timestamp = int(mod_time.mktime(timestamp.timetuple())) * 1000 + ms
+        return await self.execute_command(
+            "PEXPIRE", key, normalized_milliseconds(milliseconds)
+        )
 
-        return await self.execute_command("PEXPIREAT", key, timestamp)
+    async def pexpireat(
+        self, key: str, milliseconds_timestamp: Union[int, datetime.datetime]
+    ) -> int:
+        """
+        Set the expiration for a key as a UNIX timestamp specified in milliseconds
 
-    async def pttl(self, key):
+        :return: if the timeout was set or not.
+         e.g. key doesn't exist, or operation skipped due to the provided arguments.
+        """
+
+        return await self.execute_command(
+            "PEXPIREAT", key, normalized_time_milliseconds(milliseconds_timestamp)
+        )
+
+    async def pttl(self, key: str) -> int:
         """
         Returns the number of milliseconds until the key ``key`` will expire
+
+        :return: TTL in milliseconds, or a negative value in order to signal an error
         """
 
         return await self.execute_command("PTTL", key)
 
-    async def randomkey(self):
-        """Returns the name of a random key"""
+    async def randomkey(self) -> Optional[str]:
+        """
+        Returns the name of a random key
+
+        :return: the random key, or ``None`` when the database is empty.
+        """
 
         return await self.execute_command("RANDOMKEY")
 
-    async def rename(self, key, newkey):
+    async def rename(self, key: str, newkey: str) -> str:
         """
         Rekeys key ``key`` to ``newkey``
         """
 
         return await self.execute_command("RENAME", key, newkey)
 
-    async def renamenx(self, key, newkey):
-        """Rekeys key ``key`` to ``newkey`` if ``newkey`` doesn't already exist"""
+    async def renamenx(self, key, newkey: str) -> bool:
+        """
+        Rekeys key ``key`` to ``newkey`` if ``newkey`` doesn't already exist
+
+        :return: False when ``newkey`` already exists.
+        """
 
         return await self.execute_command("RENAMENX", key, newkey)
 
-    async def restore(self, key, ttl, serialized_value, replace=False):
+    async def restore(
+        self,
+        key: str,
+        ttl: int,
+        serialized_value: str,
+        replace: Optional[bool] = None,
+        absttl: Optional[bool] = None,
+        idletime: Optional[Union[int, datetime.timedelta]] = None,
+        freq: Optional[int] = None,
+    ) -> bool:
         """
-        Creates a key using the provided serialized value, previously obtained
-        using DUMP.
+        Create a key using the provided serialized value, previously obtained using DUMP.
         """
         params = [key, ttl, serialized_value]
 
         if replace:
             params.append("REPLACE")
 
+        if absttl:
+            params.append("ABSTTL")
+
+        if idletime is not None:
+            params.extend(["IDLETIME", normalized_milliseconds(idletime)])
+
+        if freq:
+            params.extend(["FREQ", freq])
+
         return await self.execute_command("RESTORE", *params)
 
+    @versionchanged(
+        reason="""
+        - Changed ``start`` to :paramref:`offset`
+        - Changed ``num`` to :paramref:`count`
+        - Changed ``get`` to :paramref:`gets` (:class:`List[str]`)
+        - Moved ``asc`` and ``desc`` to :paramref:`order` (:class:`PureToken`)
+        - Moved ``alpha`` to :paramref:`sorting` (:class:`PureToken`)
+        """,
+        version="3.0.0",
+    )
+    @mutually_inclusive_parameters("offset", "count")
     async def sort(
         self,
-        key,
-        start=None,
-        num=None,
-        by=None,
-        get=None,
-        desc=False,
-        alpha=False,
-        store=None,
-        groups=False,
-    ):
+        key: str,
+        gets: List[str] = [],
+        by: Optional[str] = None,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+        order: Optional[Literal[PureToken.ASC, PureToken.DESC]] = None,
+        alpha: Optional[bool] = None,
+        store: Optional[str] = None,
+    ) -> Union[list, int]:
         """
-        Sorts and returns a list, set or sorted set at ``key``.
+        Sort the elements in a list, set or sorted set
 
-        ``start`` and ``num`` are for paginating sorted data
+        :return: a list of sorted elements.
 
-        ``by`` allows using an external key to weight and sort the items.
-            Use an "*" to indicate where in the key the item value is located
-
-        ``get`` is for returning items from external keys rather than the
-            sorted data itself.  Use an "*" to indicate where int he key
-            the item value is located
-
-        ``desc`` is for reversing the sort
-
-        ``alpha`` is for sorting lexicographically rather than numerically
-
-        ``store`` is for storing the result of the sort into
-            the key ``store``
-
-        ``groups`` if set to True and if ``get`` contains at least two
-            elements, sort will return a list of tuples, each containing the
-            values fetched from the arguments to ``get``.
-
+         When the ``store`` option is specified the command returns the number of sorted elements
+         in the destination list.
         """
-
-        if (start is not None and num is None) or (num is not None and start is None):
-            raise RedisError("``start`` and ``num`` must both be specified")
 
         pieces = [key]
 
@@ -267,88 +385,86 @@ class KeysCommandMixin(CommandMixin):
             pieces.append(b("BY"))
             pieces.append(by)
 
-        if start is not None and num is not None:
+        if offset is not None and count is not None:
             pieces.append(b("LIMIT"))
-            pieces.append(start)
-            pieces.append(num)
+            pieces.append(offset)
+            pieces.append(count)
 
-        if get is not None:
-            # If get is a string assume we want to get a single value.
-            # Otherwise assume it's an interable and we want to get multiple
-            # values. We can't just iterate blindly because strings are
-            # iterable.
+        for g in gets:
+            pieces.append(b("GET"))
+            pieces.append(g)
 
-            if isinstance(get, str):
-                pieces.append(b("GET"))
-                pieces.append(get)
-            else:
-                for g in get:
-                    pieces.append(b("GET"))
-                    pieces.append(g)
+        if order:
+            pieces.append(order.value)
 
-        if desc:
-            pieces.append(b("DESC"))
-
-        if alpha:
-            pieces.append(b("ALPHA"))
+        if alpha is not None:
+            pieces.append("ALPHA")
 
         if store is not None:
             pieces.append(b("STORE"))
             pieces.append(store)
 
-        if groups:
-            if not get or isinstance(get, str) or len(get) < 2:
-                raise DataError(
-                    'when using "groups" the "get" argument '
-                    "must be specified and contain at least "
-                    "two keys"
-                )
-
-        options = {"groups": len(get) if groups else None}
+        options = {}
 
         return await self.execute_command("SORT", *pieces, **options)
 
-    async def touch(self, keys):
+    async def touch(self, *keys: str) -> int:
         """
         Alters the last access time of a key(s).
-        A key is ignored if it does not exist.
-        """
+        Returns the number of existing keys specified.
 
+        :return: The number of keys that were touched.
+        """
         return await self.execute_command("TOUCH", *keys)
 
-    async def ttl(self, key):
-        """Returns the number of seconds until the key ``key`` will expire"""
+    async def ttl(self, key: str) -> int:
+        """
+        Get the time to live for a key in seconds
+
+        :return: TTL in seconds, or a negative value in order to signal an error
+        """
 
         return await self.execute_command("TTL", key)
 
-    async def type(self, key):
-        """Returns the type of key ``key``"""
+    async def type(self, key: str) -> str:
+        """
+        Determine the type stored at key
+
+        :return: type of ``key``, or ``None`` when ``key`` does not exist.
+        """
 
         return await self.execute_command("TYPE", key)
 
-    async def unlink(self, *keys):
-        """Removes the specified keys in a different thread, not blocking"""
+    async def unlink(self, *keys: str) -> int:
+        """
+        Delete a key asynchronously in another thread.
+        Otherwise it is just as :meth:`delete`, but non blocking.
+
+        :return: The number of keys that were unlinked.
+        """
 
         return await self.execute_command("UNLINK", *keys)
 
-    async def wait(self, numreplicas, timeout):
+    async def wait(self, numreplicas: int, timeout: int) -> int:
         """
-        Redis synchronous replication
-        That returns the number of replicas that processed the query when
-        we finally have at least ``numreplicas``, or when the ``timeout`` was
-        reached.
+        Wait for the synchronous replication of all the write commands sent in the context of
+        the current connection
+
+        :return: The command returns the number of replicas reached by all the writes performed
+         in the context of the current connection.
         """
 
         return await self.execute_command("WAIT", numreplicas, timeout)
 
-    async def scan(self, cursor=0, match=None, count=None):
+    async def scan(
+        self,
+        cursor: int = 0,
+        match: Optional[str] = None,
+        count: Optional[int] = None,
+        type_: Optional[str] = None,
+    ) -> None:
         """
-        Incrementally return lists of key keys. Also return a cursor
-        indicating the scan position.
-
-        ``match`` allows for filtering the keys by pattern
-
-        ``count`` allows for hint the minimum number of returns
+        Incrementally iterate the keys space
         """
         pieces = [cursor]
 
@@ -357,6 +473,9 @@ class KeysCommandMixin(CommandMixin):
 
         if count is not None:
             pieces.extend([b("COUNT"), count])
+
+        if type_ is not None:
+            pieces.extend([b("TYPE"), type_])
 
         return await self.execute_command("SCAN", *pieces)
 

@@ -126,25 +126,19 @@ class GeoCommandMixin(CommandMixin):
 
         The units must be one of the following : m, km mi, ft. By default
 
-        ``withdist`` indicates to return the distances of each place.
-
-        ``withcoord`` indicates to return the latitude and longitude of
-        each place.
-
-        ``withhash`` indicates to return the geohash string of each place.
-
-        ``count`` indicates to return the number of elements up to N.
-
-        ``sort`` indicates to return the places in a sorted way, ASC for
-        nearest to fairest and DESC for fairest to nearest.
-
-        ``store`` indicates to save the places names in a sorted set named
-        with a specific key, each element of the destination sorted set is
-        populated with the score got from the original geo sorted set.
-
-        ``store_dist`` indicates to save the places names in a sorted set
-        named with a specific key, instead of ``store`` the sorted set
-        destination score is set with the distance.
+        :param withdist: indicates to return the distances of each place.
+        :param withcoord: indicates to return the latitude and longitude of
+         each place.
+        :param withhash: indicates to return the geohash string of each place.
+        :param count: indicates to return the number of elements up to N.
+        :param sort: indicates to return the places in a sorted way, ASC for
+         nearest to fairest and DESC for fairest to nearest.
+        :param store: indicates to save the places names in a sorted set named
+         with a specific key, each element of the destination sorted set is
+         populated with the score got from the original geo sorted set.
+        :param store_dist: indicates to save the places names in a sorted set
+         named with a specific key, instead of ``store`` the sorted set
+         destination score is set with the distance.
         """
 
         return await self._georadiusgeneric(
@@ -276,39 +270,29 @@ class GeoCommandMixin(CommandMixin):
         This command should be used in place of the deprecated
         GEORADIUS and GEORADIUSBYMEMBER commands.
 
-        ``member`` Use the position of the given existing
+        :param member: Use the position of the given existing
          member in the sorted set. Can't be given with ``longitude``
          and ``latitude``.
-
-        ``longitude`` and ``latitude`` Use the position given by
+        :param longitude: and ``latitude`` Use the position given by
          this coordinates. Can't be given with ``member``
-
-        ``radius`` Similar to GEORADIUS, search inside circular
-        area according the given radius. Can't be given with
-        ``height`` and ``width``.
-
-        ``height`` and ``width`` Search inside an axis-aligned
-        rectangle, determined by the given height and width.
-        Can't be given with ``radius``
-
-        ``unit`` must be one of the following : m, km, mi, ft.
-        `m` for meters (the default value), `km` for kilometers,
-        `mi` for miles and `ft` for feet.
-
-        ``sort`` indicates to return the places in a sorted way,
-        ASC for nearest to farest and DESC for farest to nearest.
-
-        ``count`` limit the results to the first count matching items.
-
-        ``any`` is set to True, the command will return as soon as
-        enough matches are found. Can't be provided without ``count``
-
-        ``withdist`` indicates to return the distances of each place.
-
-        ``withcoord`` indicates to return the latitude and longitude of
-        each place.
-
-        ``withhash`` indicates to return the geohash string of each place.
+        :param radius: Similar to GEORADIUS, search inside circular
+         area according the given radius. Can't be given with
+        :param height: and ``width``.
+        :param height: and ``width`` Search inside an axis-aligned
+         rectangle, determined by the given height and width.
+         Can't be given with ``radius``
+        :param unit: must be one of the following : m, km, mi, ft.
+         `m` for meters (the default value), `km` for kilometers,
+         `mi` for miles and `ft` for feet.
+        :param sort: indicates to return the places in a sorted way,
+         ASC for nearest to farest and DESC for farest to nearest.
+        :param count: limit the results to the first count matching items.
+        :param any: is set to True, the command will return as soon as
+         enough matches are found. Can't be provided without ``count``
+        :param withdist: indicates to return the distances of each place.
+        :param withcoord: indicates to return the latitude and longitude of
+         each place.
+        :param withhash: indicates to return the geohash string of each place.
 
         .. versionadded:: 2.1.0
         """

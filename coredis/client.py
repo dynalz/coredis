@@ -1,6 +1,8 @@
 import asyncio
 
+from coredis.commands.acl import ACLCommandMixin, ClusterACLCommandMixin
 from coredis.commands.cluster import ClusterCommandMixin
+from coredis.commands.command import CommandCommandMixin
 from coredis.commands.connection import (
     ClusterConnectionCommandMixin,
     ConnectionCommandMixin,
@@ -52,7 +54,9 @@ from coredis.utils import (
 )
 
 mixins = [
+    ACLCommandMixin,
     ClusterCommandMixin,
+    CommandCommandMixin,
     ConnectionCommandMixin,
     ExtraCommandMixin,
     GeoCommandMixin,
@@ -73,6 +77,7 @@ mixins = [
 ]
 
 cluster_mixins = [
+    ClusterACLCommandMixin,
     ClusterCommandMixin,
     ClusterStringsCommandMixin,
     ClusterServerCommandMixin,
@@ -424,9 +429,18 @@ class StrictRedisCluster(StrictRedis, *cluster_mixins):
             key = args[idx]
         elif command in ("XGROUP", "XINFO"):
             key = args[2]
+        elif command in ("ZINTER", "ZDIFF", "ZUNION"):
+            keys = args[2 : args[1] + 1]
+            slots = {self.connection_pool.nodes.keyslot(key) for key in keys}
+            return slots.pop()
+        elif command in ("ZINTERSTORE", "ZDIFFSTORE", "ZUNIONSTORE"):
+            keys = args[3 : args[2] + 3]
+            slots = {self.connection_pool.nodes.keyslot(key) for key in keys}
+            return slots.pop()
+        elif command == "OBJECT":
+            key = args[2]
         else:
             key = args[1]
-
         return self.connection_pool.nodes.keyslot(key)
 
     def _merge_result(self, command, res, **kwargs):
@@ -447,7 +461,7 @@ class StrictRedisCluster(StrictRedis, *cluster_mixins):
         """
         command = args[0]
         node_flag = self.nodes_flags.get(command)
-
+        print(command, node_flag)
         if node_flag == NodeFlag.BLOCKED:
             return blocked_command(self, command)
         elif node_flag == NodeFlag.RANDOM:
@@ -483,7 +497,6 @@ class StrictRedisCluster(StrictRedis, *cluster_mixins):
             raise RedisClusterException("Unable to determine command to use")
 
         command = args[0]
-
         node = self.determine_node(*args, **kwargs)
 
         if node:

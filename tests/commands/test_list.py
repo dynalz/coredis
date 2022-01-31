@@ -1,5 +1,6 @@
 import pytest
 
+from coredis import PureToken
 from coredis.utils import b, iteritems, iterkeys
 from tests.conftest import targets
 
@@ -10,61 +11,61 @@ class TestList:
     async def test_blpop(self, client):
         await client.rpush("a{foo}", "1", "2")
         await client.rpush("b{foo}", "3", "4")
-        assert await client.blpop(["b{foo}", "a{foo}"], timeout=1) == (
+        assert await client.blpop("b{foo}", "a{foo}", timeout=1) == [
             b("b{foo}"),
             b("3"),
-        )
-        assert await client.blpop(["b{foo}", "a{foo}"], timeout=1) == (
+        ]
+        assert await client.blpop("b{foo}", "a{foo}", timeout=1) == [
             b("b{foo}"),
             b("4"),
-        )
-        assert await client.blpop(["b{foo}", "a{foo}"], timeout=1) == (
+        ]
+        assert await client.blpop("b{foo}", "a{foo}", timeout=1) == [
             b("a{foo}"),
             b("1"),
-        )
-        assert await client.blpop(["b{foo}", "a{foo}"], timeout=1) == (
+        ]
+        assert await client.blpop("b{foo}", "a{foo}", timeout=1) == [
             b("a{foo}"),
             b("2"),
-        )
-        assert await client.blpop(["b{foo}", "a{foo}"], timeout=1) is None
+        ]
+        assert await client.blpop("b{foo}", "a{foo}", timeout=1) == []
         await client.rpush("c{foo}", "1")
-        assert await client.blpop("c{foo}", timeout=1) == (b("c{foo}"), b("1"))
+        assert await client.blpop("c{foo}", timeout=1) == [b("c{foo}"), b("1")]
 
     async def test_brpop(self, client):
         await client.rpush("a{foo}", "1", "2")
         await client.rpush("b{foo}", "3", "4")
-        assert await client.brpop(["b{foo}", "a{foo}"], timeout=1) == (
+        assert await client.brpop("b{foo}", "a{foo}", timeout=1) == [
             b("b{foo}"),
             b("4"),
-        )
-        assert await client.brpop(["b{foo}", "a{foo}"], timeout=1) == (
+        ]
+        assert await client.brpop("b{foo}", "a{foo}", timeout=1) == [
             b("b{foo}"),
             b("3"),
-        )
-        assert await client.brpop(["b{foo}", "a{foo}"], timeout=1) == (
+        ]
+        assert await client.brpop("b{foo}", "a{foo}", timeout=1) == [
             b("a{foo}"),
             b("2"),
-        )
-        assert await client.brpop(["b{foo}", "a{foo}"], timeout=1) == (
+        ]
+        assert await client.brpop("b{foo}", "a{foo}", timeout=1) == [
             b("a{foo}"),
             b("1"),
-        )
-        assert await client.brpop(["b{foo}", "a{foo}"], timeout=1) is None
+        ]
+        assert await client.brpop("b{foo}", "a{foo}", timeout=1) == []
         await client.rpush("c{foo}", "1")
-        assert await client.brpop("c{foo}", timeout=1) == (b("c{foo}"), b("1"))
+        assert await client.brpop("c{foo}", timeout=1) == [b("c{foo}"), b("1")]
 
     async def test_brpoplpush(self, client):
         await client.rpush("a", "1", "2")
         await client.rpush("b", "3", "4")
-        assert await client.brpoplpush("a", "b") == b("2")
-        assert await client.brpoplpush("a", "b") == b("1")
+        assert await client.brpoplpush("a", "b", timeout=1) == b("2")
+        assert await client.brpoplpush("a", "b", timeout=1) == b("1")
         assert await client.brpoplpush("a", "b", timeout=1) is None
         assert await client.lrange("a", 0, -1) == []
         assert await client.lrange("b", 0, -1) == [b("1"), b("2"), b("3"), b("4")]
 
     async def test_brpoplpush_empty_string(self, client):
         await client.rpush("a", "")
-        assert await client.brpoplpush("a", "b") == b("")
+        assert await client.brpoplpush("a", "b", timeout=1) == b("")
 
     async def test_lindex(self, client):
         await client.rpush("a", "1", "2", "3")
@@ -74,9 +75,9 @@ class TestList:
 
     async def test_linsert(self, client):
         await client.rpush("a", "1", "2", "3")
-        assert await client.linsert("a", "after", "2", "2.5") == 4
+        assert await client.linsert("a", PureToken.AFTER, "2", "2.5") == 4
         assert await client.lrange("a", 0, -1) == [b("1"), b("2"), b("2.5"), b("3")]
-        assert await client.linsert("a", "before", "2", "1.5") == 5
+        assert await client.linsert("a", PureToken.BEFORE, "2", "1.5") == 5
         assert await client.lrange("a", 0, -1) == [
             b("1"),
             b("1.5"),
@@ -91,10 +92,10 @@ class TestList:
 
     async def test_lpop(self, client):
         await client.rpush("a", "1", "2", "3")
-        assert await client.lpop("a") == b("1")
-        assert await client.lpop("a") == b("2")
-        assert await client.lpop("a") == b("3")
-        assert await client.lpop("a") is None
+        assert await client.lpop("a") == [b("1")]
+        assert await client.lpop("a") == [b("2")]
+        assert await client.lpop("a") == [b("3")]
+        assert await client.lpop("a") == []
 
     async def test_lpush(self, client):
         assert await client.lpush("a", "1") == 1
@@ -141,10 +142,10 @@ class TestList:
 
     async def test_rpop(self, client):
         await client.rpush("a", "1", "2", "3")
-        assert await client.rpop("a") == b("3")
-        assert await client.rpop("a") == b("2")
-        assert await client.rpop("a") == b("1")
-        assert await client.rpop("a") is None
+        assert await client.rpop("a") == [b("3")]
+        assert await client.rpop("a") == [b("2")]
+        assert await client.rpop("a") == [b("1")]
+        assert await client.rpop("a") == []
 
     async def test_rpoplpush(self, client):
         await client.rpush("a", "a1", "a2", "a3")
@@ -169,14 +170,14 @@ class TestList:
     @pytest.mark.min_server_version("6.0.6")
     async def test_lpos(self, client):
         assert await client.rpush("a", "a", "b", "c", "1", "2", "3", "c", "c") == 8
-        assert await client.lpos("a", "a") == 0
-        assert await client.lpos("a", "c") == 2
+        assert await client.lpos("a", "a") == [0]
+        assert await client.lpos("a", "c") == [2]
 
-        assert await client.lpos("a", "c", rank=1) == 2
-        assert await client.lpos("a", "c", rank=2) == 6
-        assert await client.lpos("a", "c", rank=4) is None
-        assert await client.lpos("a", "c", rank=-1) == 7
-        assert await client.lpos("a", "c", rank=-2) == 6
+        assert await client.lpos("a", "c", rank=1) == [2]
+        assert await client.lpos("a", "c", rank=2) == [6]
+        assert await client.lpos("a", "c", rank=4) == []
+        assert await client.lpos("a", "c", rank=-1) == [7]
+        assert await client.lpos("a", "c", rank=-2) == [6]
 
         assert await client.lpos("a", "c", count=0) == [2, 6, 7]
         assert await client.lpos("a", "c", count=1) == [2]
@@ -187,10 +188,10 @@ class TestList:
         assert await client.lpos("a", "c", count=2, rank=-1) == [7, 6]
 
         assert await client.lpos("axxx", "c", count=0, rank=2) == []
-        assert await client.lpos("axxx", "c") is None
+        assert await client.lpos("axxx", "c") == []
 
         assert await client.lpos("a", "x", count=2) == []
-        assert await client.lpos("a", "x") is None
+        assert await client.lpos("a", "x") == []
 
         assert await client.lpos("a", "a", count=0, maxlen=1) == [0]
         assert await client.lpos("a", "c", count=0, maxlen=1) == []
@@ -201,14 +202,18 @@ class TestList:
     @pytest.mark.min_server_version("6.2.0")
     async def test_lmove(self, client):
         await client.rpush("a{foo}", "one", "two", "three", "four")
-        assert await client.lmove("a{foo}", "b{foo}")
-        assert await client.lmove("a{foo}", "b{foo}", "right", "left")
+        assert await client.lmove("a{foo}", "b{foo}", PureToken.LEFT, PureToken.RIGHT)
+        assert await client.lmove("a{foo}", "b{foo}", PureToken.RIGHT, PureToken.LEFT)
 
     @pytest.mark.min_server_version("6.2.0")
     async def test_blmove(self, client):
         await client.rpush("a{foo}", "one", "two", "three", "four")
-        assert await client.blmove("a{foo}", "b{foo}", 5)
-        assert await client.blmove("a{foo}", "b{foo}", 1, "RIGHT", "LEFT")
+        assert await client.blmove(
+            "a{foo}", "b{foo}", PureToken.LEFT, PureToken.RIGHT, timeout=5
+        )
+        assert await client.blmove(
+            "a{foo}", "b{foo}", PureToken.RIGHT, PureToken.LEFT, timeout=1
+        )
 
     async def test_binary_lists(self, client):
         mapping = {

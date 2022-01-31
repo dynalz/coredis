@@ -1,5 +1,11 @@
-from coredis.exceptions import DataError, RedisClusterException, RedisError
+from typing import List, Literal, Optional, Union
+
+from deprecated.sphinx import versionadded, versionchanged
+
+from coredis.exceptions import RedisClusterException
+from coredis.tokens import PureToken
 from coredis.utils import b, bool_ok, dict_merge, nativestr, string_keys_to_dict
+from coredis.validators import mutually_inclusive_parameters
 
 from . import CommandMixin
 
@@ -7,7 +13,7 @@ from . import CommandMixin
 class ListsCommandMixin(CommandMixin):
 
     RESPONSE_CALLBACKS = dict_merge(
-        string_keys_to_dict("BLPOP BRPOP", lambda r: r and tuple(r) or None),
+        string_keys_to_dict("LPOP RPOP BLPOP BRPOP", lambda r: r and list(r) or []),
         string_keys_to_dict(
             # these return OK, or int if redis-server is >=1.3.4
             "LPUSH RPUSH",
@@ -17,122 +23,215 @@ class ListsCommandMixin(CommandMixin):
         string_keys_to_dict("LINSERT LLEN LPUSHX RPUSHX", int),
     )
 
-    async def blpop(self, keys, timeout=0):
+    @versionchanged(
+        reason="""
+        :paramref:`wherefrom` and :paramref:`whereto` types changed from string to
+        :class:`PureToken` types
+        """,
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def blmove(
+        self,
+        source: str,
+        destination: str,
+        wherefrom: Literal[PureToken.LEFT, PureToken.RIGHT],
+        whereto: Literal[PureToken.LEFT, PureToken.RIGHT],
+        timeout: float,
+    ) -> Optional[str]:
         """
-        LPOP a value off of the first non-empty list
-        named in the ``keys`` list.
+        Pop an element from a list, push it to another list and return it;
+        or block until one is available
 
-        If none of the lists in ``keys`` has a value to LPOP, then block
-        for ``timeout`` seconds, or until a value gets pushed on to one
-        of the lists.
 
-        If timeout is 0, then block indefinitely.
+        :return: the element being popped from ``source`` and pushed to ``destination``
         """
+        params = [source, destination, wherefrom.value, whereto.value, timeout]
 
-        if timeout is None:
-            timeout = 0
+        return await self.execute_command("BLMOVE", *params)
 
-        if isinstance(keys, str):
-            keys = [keys]
-        else:
-            keys = list(keys)
-        keys.append(timeout)
-
-        return await self.execute_command("BLPOP", *keys)
-
-    async def brpop(self, keys, timeout=0):
+    async def blpop(self, *keys: str, timeout: float) -> List:
         """
-        RPOP a value off of the first non-empty list
-        named in the ``keys`` list.
+        Remove and get the first element in a list, or block until one is available
 
-        If none of the lists in ``keys`` has a value to LPOP, then block
-        for ``timeout`` seconds, or until a value gets pushed on to one
-        of the lists.
-
-        If timeout is 0, then block indefinitely.
-        """
-
-        if timeout is None:
-            timeout = 0
-
-        if isinstance(keys, str):
-            keys = [keys]
-        else:
-            keys = list(keys)
-        keys.append(timeout)
-
-        return await self.execute_command("BRPOP", *keys)
-
-    async def brpoplpush(self, source, destination, timeout=0):
-        """
-        Pop a value off the tail of ``source``, push it on the head of ``destination``
-        and then return it.
-
-        This command blocks until a value is in ``source`` or until ``timeout``
-        seconds elapse, whichever is first. A ``timeout`` value of 0 blocks
-        forever.
+        :return:
+         - ``None`` when no element could be popped and the timeout expired.
+         - A tuple with the first element being the name of the key
+           where an element was popped and the second element being the value of the
+           popped element.
         """
 
-        if timeout is None:
-            timeout = 0
+        return await self.execute_command("BLPOP", *keys, timeout)
+
+    async def brpop(self, *keys: str, timeout: float) -> List:
+        """
+        Remove and get the last element in a list, or block until one is available
+
+        :return:
+         - ``None`` when no element could be popped and the timeout expired.
+         - A tuple with the first element being the name of the key
+           where an element was popped and the second element being the value of the
+           popped element.
+        """
+
+        return await self.execute_command("BRPOP", *keys, timeout)
+
+    async def brpoplpush(
+        self, source: str, destination: str, timeout: float
+    ) -> Optional[str]:
+        """
+        Pop an element from a list, push it to another list and return it; or block until one is available
+
+        :return: the element being popped from ``source`` and pushed to ``destination``.
+        """
 
         return await self.execute_command("BRPOPLPUSH", source, destination, timeout)
 
-    async def lindex(self, key, index):
+    async def lindex(self, key: str, index: int) -> Optional[str]:
         """
-        Return the item from list ``key`` at position ``index``
 
-        Negative indexes are supported and will return an item at the
-        end of the list
+        Get an element from a list by its index
+
+        :return: the requested element, or ``None`` when ``index`` is out of range.
         """
 
         return await self.execute_command("LINDEX", key, index)
 
-    async def linsert(self, key, where, pivot, element):
+    @versionchanged(
+        reason="changed :paramref:`where` to  a :class:`PureToken`", version="3.0.0"
+    )
+    async def linsert(
+        self,
+        key: str,
+        where: Literal[PureToken.BEFORE, PureToken.AFTER],
+        pivot: str,
+        element: str,
+    ) -> int:
         """
-        Insert ``element`` in list ``key`` either immediately before or after
-        [``where``] ``pivot``
+        Inserts element in the list stored at key either before or after the reference value
+        pivot.
 
-        Returns the new length of the list on success or -1 if ``pivot``
-        is not in the list.
+        :return: the length of the list after the insert operation, or ``-1`` when
+         the value pivot was not found.
         """
 
-        return await self.execute_command("LINSERT", key, where, pivot, element)
+        return await self.execute_command("LINSERT", key, where.value, pivot, element)
 
-    async def llen(self, key):
-        """Returns the length of the list ``key``"""
+    async def llen(self, key: str) -> int:
+        """
+        :return: the length of the list at ``key``.
+        """
 
         return await self.execute_command("LLEN", key)
 
-    async def lpop(self, key):
-        """RemoveS and returns the first item of the list ``key``"""
+    @versionchanged(
+        reason="""
+        :paramref:`wherefrom` and :paramref:`whereto` types changed from string to
+        :class:`PureToken` types
+        """,
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def lmove(
+        self,
+        source: str,
+        destination: str,
+        wherefrom: Literal[PureToken.LEFT, PureToken.RIGHT],
+        whereto: Literal[PureToken.LEFT, PureToken.RIGHT],
+    ) -> str:
+        """
+        Pop an element from a list, push it to another list and return it
 
-        return await self.execute_command("LPOP", key)
+        :return: the element being popped and pushed.
+        """
+        params = [source, destination, wherefrom.value, whereto.value]
 
-    async def lpush(self, key, *elements):
-        """Pushes ``elements`` onto the head of the list ``key``"""
+        return await self.execute_command("LMOVE", *params)
+
+    @versionchanged(
+        reason="changed return type to return a list of popped elements when count is provided",
+        version="3.0.0",
+    )
+    async def lpop(
+        self, key: str, count: Optional[int] = 1
+    ) -> Optional[Union[str, list]]:
+        """
+        Remove and get the first ``count`` elements in a list
+
+        :return: the value of the first element, or ``None`` when ``key`` does not exist.
+         If ``count`` is provided the return is a list of popped elements,
+         or ``None`` when ``key`` does not exist.
+        """
+        pieces = []
+        if count is not None:
+            pieces.append(count)
+        return await self.execute_command("LPOP", key, *pieces)
+
+    @versionchanged(
+        reason="changed return type to return a list of positions when :paramref:`count` is provided",
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def lpos(
+        self,
+        key: str,
+        element: str,
+        rank: Optional[int] = None,
+        count: Optional[int] = 1,
+        maxlen: Optional[int] = None,
+    ) -> Optional[Union[int, List[int]]]:
+        """
+
+        Return the index of matching elements on a list
+
+
+        :return: The command returns the integer representing the matching element, or ``None``
+         if there is no match.
+
+         If the ``count`` argument is given a list of integers representing
+         the matching elements.
+        """
+        pieces: List[Union[int, str]] = [key, element]
+
+        if count is not None:
+            pieces.extend(["COUNT", count])
+
+        if rank is not None:
+            pieces.extend(["RANK", rank])
+
+        if maxlen is not None:
+            pieces.extend(["MAXLEN", maxlen])
+
+        return await self.execute_command("LPOS", *pieces)
+
+    async def lpush(self, key: str, *elements: str) -> int:
+        """
+        Prepend one or multiple elements to a list
+
+        :return: the length of the list after the push operations.
+        """
 
         return await self.execute_command("LPUSH", key, *elements)
 
-    async def lpushx(self, key, *elements):
+    async def lpushx(self, key: str, *elements: str) -> int:
         """
-        Pushes ``elements`` onto the head of the list ``key`` if it exists
+        Prepend an element to a list, only if the list exists
+
+        :return: the length of the list after the push operation.
         """
 
         return await self.execute_command("LPUSHX", key, *elements)
 
-    async def lrange(self, key, start, stop):
+    async def lrange(self, key: str, start: int, stop: int) -> List:
         """
-        Returns a slice of the list ``key`` between
-        position ``start`` and ``stop``
+        Get a range of elements from a list
 
-        ``start`` and ``stop`` can be negative numbers just like
-        Python slicing notation
+        :return: list of elements in the specified range.
         """
 
         return await self.execute_command("LRANGE", key, start, stop)
 
-    async def lrem(self, key, count, element):
+    async def lrem(self, key: str, count: int, element: str) -> int:
         """
         Removes the first ``count`` occurrences of elements equal to ``element``
         from the list stored at ``key``.
@@ -141,16 +240,18 @@ class ListsCommandMixin(CommandMixin):
             count > 0: Remove elements equal to value moving from head to tail.
             count < 0: Remove elements equal to value moving from tail to head.
             count = 0: Remove all elements equal to value.
+
+        :return: the number of removed elements.
         """
 
         return await self.execute_command("LREM", key, count, element)
 
-    async def lset(self, key, index, element):
+    async def lset(self, key: str, index: int, element: str) -> str:
         """Sets ``index`` of list ``key`` to ``element``"""
 
         return await self.execute_command("LSET", key, index, element)
 
-    async def ltrim(self, key, start, stop):
+    async def ltrim(self, key: str, start: int, stop: int) -> str:
         """
         Trims the list ``key``, removing all values not within the slice
         between ``start`` and ``stop``
@@ -161,90 +262,56 @@ class ListsCommandMixin(CommandMixin):
 
         return await self.execute_command("LTRIM", key, start, stop)
 
-    async def rpop(self, key):
-        """Removes and return the last item of the list ``key``"""
-
-        return await self.execute_command("RPOP", key)
-
-    async def rpoplpush(self, source, destination):
+    @versionchanged(
+        reason="changed return type to return a list of popped elements when count is provided",
+        version="3.0.0",
+    )
+    async def rpop(
+        self, key: str, count: Optional[int] = 1
+    ) -> Optional[Union[str, list]]:
         """
-        RPOP a value off of the ``source`` list and atomically LPUSH it
-        on to the ``destination`` list.  Returns the value.
+        Remove and get the last elements in a list
+
+        :return: When called without the ``count`` argument the value of the last element, or
+         ``None`` when ``key`` does not exist.
+
+         When called with the ``count`` argument list of popped elements, or ``None`` when
+         ``key`` does not exist.
+        """
+
+        pieces = []
+
+        if count is not None:
+            pieces.extend([count])
+
+        return await self.execute_command("RPOP", key, *pieces)
+
+    async def rpoplpush(self, source: str, destination: str) -> str:
+        """
+        Remove the last element in a list, prepend it to another list and return it
+
+        :return: the element being popped and pushed.
         """
 
         return await self.execute_command("RPOPLPUSH", source, destination)
 
-    async def rpush(self, key, *elements):
-        """Pushes ``elements`` onto the tail of the list ``key``"""
+    async def rpush(self, key: str, *elements: str) -> int:
+        """
+        Append an element(s) to a list
+
+        :return: the length of the list after the push operation.
+        """
 
         return await self.execute_command("RPUSH", key, *elements)
 
-    async def rpushx(self, key, *elements):
+    async def rpushx(self, key: str, *elements: str) -> int:
         """
-        Pushes ``elements`` onto the tail of the list ``key`` if it exists
+        Append a element(s) to a list, only if the list exists
+
+        :return: the length of the list after the push operation.
         """
 
         return await self.execute_command("RPUSHX", key, *elements)
-
-    async def lmove(self, source, destination, wherefrom="LEFT", whereto="RIGHT"):
-        """
-        Atomically returns and removes the first/last element of a list,
-        pushing it as the first/last element on the destination list.
-        Returns the element being popped and pushed.
-
-        .. versionadded:: 2.1.0
-        """
-        params = [source, destination, wherefrom, whereto]
-
-        return await self.execute_command("LMOVE", *params)
-
-    async def blmove(
-        self, source, destination, timeout, wherefrom="LEFT", whereto="RIGHT"
-    ):
-        """
-        Blocking version of lmove.
-
-        .. versionadded:: 2.1.0
-        """
-        params = [source, destination, wherefrom, whereto, timeout]
-
-        return await self.execute_command("BLMOVE", *params)
-
-    async def lpos(self, key, element, rank=None, count=None, maxlen=None):
-        """
-        Get position of ``element`` within the list ``key``
-         If specified, ``rank`` indicates the "rank" of the first element to
-         return in case there are multiple copies of ``element`` in the list.
-         By default, LPOS returns the position of the first occurrence of
-         ``element`` in the list. When ``rank`` 2, LPOS returns the position of
-         the second ``element`` in the list. If ``rank`` is negative, LPOS
-         searches the list in reverse. For example, -1 would return the
-         position of the last occurrence of ``element`` and -2 would return the
-         position of the next to last occurrence of ``element``.
-         If specified, ``count`` indicates that LPOS should return a list of
-         up to ``count`` positions. A ``count`` of 2 would return a list of
-         up to 2 positions. A ``count`` of 0 returns a list of all positions
-         matching ``element``. When ``count`` is specified and but ``value``
-         does not exist in the list, an empty list is returned.
-         If specified, ``maxlen`` indicates the maximum number of list
-         elements to scan. A ``maxlen`` of 1000 will only return the
-         position(s) of items within the first 1000 entries in the list.
-         A ``maxlen`` of 0 (the default) will scan the entire list.
-
-        .. versionadded:: 2.1.0
-        """
-        pieces = [key, element]
-
-        if rank is not None:
-            pieces.extend(["RANK", rank])
-
-        if count is not None:
-            pieces.extend(["COUNT", count])
-
-        if maxlen is not None:
-            pieces.extend(["MAXLEN", maxlen])
-
-        return await self.execute_command("LPOS", *pieces)
 
 
 class ClusterListsCommandMixin(ListsCommandMixin):
@@ -263,18 +330,15 @@ class ClusterListsCommandMixin(ListsCommandMixin):
             Operation is no longer atomic.
         """
         try:
-            value = await self.brpop(source, timeout=timeout)
+            values = await self.brpop(source, timeout=timeout)
 
-            if value is None:
+            if not values:
                 return None
         except TimeoutError:
-            # Timeout was reached
-
             return None
+        await self.lpush(destination, values[1])
 
-        await self.lpush(destination, value[1])
-
-        return value[1]
+        return values[1]
 
     async def rpoplpush(self, source, destination):
         """
@@ -286,57 +350,36 @@ class ClusterListsCommandMixin(ListsCommandMixin):
 
             Operation is no longer atomic.
         """
-        value = await self.rpop(source)
+        values = await self.rpop(source)
 
-        if value:
-            await self.lpush(destination, value)
+        if values:
+            await self.lpush(destination, values[0])
 
-            return value
+            return values[0]
 
-        return None
+        return []
 
+    @mutually_inclusive_parameters("offset", "count")
     async def sort(
         self,
-        key,
-        start=None,
-        num=None,
-        by=None,
-        get=None,
-        desc=False,
-        alpha=False,
-        store=None,
-        groups=None,
-    ):
-        """Sorts and returns a list, set or sorted set at ``key``.
+        key: str,
+        gets: List[str] = [],
+        by: Optional[str] = None,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+        order: Optional[Literal[PureToken.ASC, PureToken.DESC]] = None,
+        alpha: Optional[bool] = None,
+        store: Optional[str] = None,
+    ) -> Union[list, int]:
+        """
+        Sort the elements in a list, set or sorted set
 
-        :start: and :num:
-            are for paging through the sorted data
+        :return: a list of sorted elements.
 
-        :by:
-            allows using an external key to weight and sort the items.
-            Use an "*" to indicate where in the key the item value is located
-
-        :get:
-            is for returning items from external keys rather than the
-            sorted data itself.  Use an "*" to indicate where int he key
-            the item value is located
-
-        :desc:
-            is for reversing the sort
-
-        :alpha:
-            is for sorting lexicographically rather than numerically
-
-        :store:
-            is for storing the result of the sort into the key `store`
-
-        ClusterImpl:
-            A full implementation of the server side sort mechanics because many of the
-            options work on multiple keys that can exist on multiple servers.
+         When the ``store`` option is specified the command returns the number of sorted elements
+         in the destination list.
         """
 
-        if (start is None and num is not None) or (start is not None and num is None):
-            raise RedisError("RedisError: ``start`` and ``num`` must both be specified")
         try:
             data_type = b(await self.type(key))
 
@@ -360,14 +403,14 @@ class ClusterListsCommandMixin(ListsCommandMixin):
             else:
                 data.sort()
 
-            if desc:
+            if order == PureToken.DESC:
                 data = data[::-1]
 
-            if not (start is None and num is None):
-                data = data[start : start + num]
+            if not (offset is None and count is None):
+                data = data[offset : offset + count]
 
-            if get:
-                data = await self._retrive_data_from_sort(data, get)
+            if gets:
+                data = await self._retrive_data_from_sort(data, gets)
 
             if store is not None:
                 if data_type == b("set"):
@@ -385,33 +428,20 @@ class ClusterListsCommandMixin(ListsCommandMixin):
 
                 return len(data)
 
-            if groups:
-                if not get or isinstance(get, str) or len(get) < 2:
-                    raise DataError(
-                        'when using "groups" the "get" argument '
-                        "must be specified and contain at least "
-                        "two keys"
-                    )
-                n = len(get)
-
-                return list(zip(*[data[i::n] for i in range(n)]))
-            else:
-                return data
+            return data
         except KeyError:
             return []
 
-    async def _retrive_data_from_sort(self, data, get):
+    async def _retrive_data_from_sort(self, data, gets):
         """
         Used by sort()
         """
 
-        if get is not None:
-            if isinstance(get, str):
-                get = [get]
+        if gets:
             new_data = []
 
             for k in data:
-                for g in get:
+                for g in gets:
                     single_item = await self._get_single_item(k, g)
                     new_data.append(single_item)
             data = new_data

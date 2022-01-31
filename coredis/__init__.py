@@ -29,6 +29,7 @@ from coredis.exceptions import (
     WatchError,
 )
 from coredis.pool import BlockingConnectionPool, ClusterConnectionPool, ConnectionPool
+from coredis.tokens import PureToken
 
 from . import _version
 
@@ -60,6 +61,7 @@ __all__ = [
     "MovedError",
     "NoScriptError",
     "PubSubError",
+    "PureToken",
     "ReadOnlyError",
     "RedisClusterException",
     "RedisError",

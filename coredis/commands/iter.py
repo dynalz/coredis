@@ -14,9 +14,8 @@ class IterCommandMixin(CommandMixin):
         Make an iterator using the SCAN command so that the client doesn't
         need to remember the cursor position.
 
-        ``match`` allows for filtering the keys by pattern
-
-        ``count`` allows for hint the minimum number of returns
+        :param match: allows for filtering the keys by pattern
+        :param count: allows for hint the minimum number of returns
         """
         cursor = "0"
         while cursor != 0:
@@ -29,9 +28,8 @@ class IterCommandMixin(CommandMixin):
         Make an iterator using the SSCAN command so that the client doesn't
         need to remember the cursor position.
 
-        ``match`` allows for filtering the keys by pattern
-
-        ``count`` allows for hint the minimum number of returns
+        :param match: allows for filtering the keys by pattern
+        :param count: allows for hint the minimum number of returns
         """
         cursor = "0"
         while cursor != 0:
@@ -46,9 +44,8 @@ class IterCommandMixin(CommandMixin):
         Make an iterator using the HSCAN command so that the client doesn't
         need to remember the cursor position.
 
-        ``match`` allows for filtering the keys by pattern
-
-        ``count`` allows for hint the minimum number of returns
+        :param match: allows for filtering the keys by pattern
+        :param count: allows for hint the minimum number of returns
         """
         cursor = "0"
         while cursor != 0:
@@ -58,16 +55,14 @@ class IterCommandMixin(CommandMixin):
             for item in data.items():
                 yield item
 
-    async def zscan_iter(self, name, match=None, count=None, score_cast_func=float):
+    async def zscan_iter(self, name, match=None, count=None):
         """
         Make an iterator using the ZSCAN command so that the client doesn't
         need to remember the cursor position.
 
-        ``match`` allows for filtering the keys by pattern
-
-        ``count`` allows for hint the minimum number of returns
-
-        ``score_cast_func`` a callable used to cast the score return value
+        :param match: allows for filtering the keys by pattern
+        :param count: allows for hint the minimum number of returns
+        :param score_cast_func: a callable used to cast the score return value
         """
         cursor = "0"
         while cursor != 0:
@@ -76,7 +71,6 @@ class IterCommandMixin(CommandMixin):
                 cursor=cursor,
                 match=match,
                 count=count,
-                score_cast_func=score_cast_func,
             )
             for item in data:
                 yield item

@@ -52,12 +52,12 @@ class HashCommandMixin(CommandMixin):
 
         return await self.execute_command("HGETALL", key)
 
-    async def hincrby(self, key, field, amount=1):
+    async def hincrby(self, key, field, increment=1):
         """Increments the value of ``field`` in hash ``key`` by ``amount``"""
 
         return await self.execute_command("HINCRBY", key, key, amount)
 
-    async def hincrbyfloat(self, key, field, amount=1.0):
+    async def hincrbyfloat(self, key, field, increment=1.0):
         """
         Increments the value of ``field`` in hash ``key`` by floating
         ``amount``

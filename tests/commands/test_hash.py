@@ -43,8 +43,8 @@ class TestHash:
 
     async def test_hincrby(self, client):
         assert await client.hincrby("a", "1") == 1
-        assert await client.hincrby("a", "1", amount=2) == 3
-        assert await client.hincrby("a", "1", amount=-2) == 1
+        assert await client.hincrby("a", "1", increment=2) == 3
+        assert await client.hincrby("a", "1", increment=-2) == 1
 
     async def test_hincrbyfloat(self, client):
         assert await client.hincrbyfloat("a", "1") == 1.0

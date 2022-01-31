@@ -287,7 +287,7 @@ class PubSub:
             else:
                 subscribed_dict = self.channels
             try:
-                del subscribed_dict[message["channel"]]
+                del subscribed_Dict[message["channel"]]
             except KeyError:
                 pass
 

@@ -33,13 +33,13 @@ class TransactionCommandMixin(CommandMixin):
                         await asyncio.sleep(watch_delay)
                     continue
 
-    async def watch(self, *keys):
+    async def watch(self, *keys: str) -> bool:
         """
         Watches the values at keys ``keys``, or None if the key doesn't exist
         """
         warnings.warn(DeprecationWarning("Call WATCH from a Pipeline object"))
 
-    async def unwatch(self):
+    async def unwatch(self) -> bool:
         """
         Unwatches the value at key ``name``, or None of the key doesn't exist
         """

@@ -1,4 +1,8 @@
-from coredis.exceptions import DataError
+from typing import List, Literal
+
+from deprecated.sphinx import versionadded, versionchanged
+
+from coredis.tokens import PureToken
 from coredis.utils import NodeFlag, bool_ok, dict_merge, list_keys_to_dict, nativestr
 
 from . import CommandMixin
@@ -13,7 +17,14 @@ class ScriptingCommandMixin(CommandMixin):
         "SCRIPT LOAD": nativestr,
     }
 
-    async def eval(self, script, numkeys, *keys_and_args):
+    @versionchanged(
+        reason="""
+            - Separate ``keys_and_args`` into :paramref:`keys` and :paramref:`args`
+            - Remove ``numkeys`` argument
+            """,
+        version="3.0.0",
+    )
+    async def eval(self, script, keys: List[str] = [], args: List[str] = []):
         """
         Execute the Lua ``script``, specifying the ``numkeys`` the script
         will touch and the key names and argument values in ``keys_and_args``.
@@ -23,9 +34,18 @@ class ScriptingCommandMixin(CommandMixin):
         function exists purely for Redis API completion.
         """
 
-        return await self.execute_command("EVAL", script, numkeys, *keys_and_args)
+        return await self.execute_command("EVAL", script, len(keys), *keys, *args)
 
-    async def evalsha(self, sha, numkeys, *keys_and_args):
+    @versionchanged(
+        reason="""
+            - Separate ``keys_and_args`` into :paramref:`keys` and :paramref:`args`
+            - Remove ``numkeys`` argument
+            """,
+        version="3.0.0",
+    )
+    async def evalsha(
+        self, sha1: str, keys: List[str] = [], args: List[str] = []
+    ) -> None:
         """
         Use the ``sha`` to execute a Lua script already registered via EVAL
         or SCRIPT LOAD. Specify the ``numkeys`` the script will touch and the
@@ -36,46 +56,43 @@ class ScriptingCommandMixin(CommandMixin):
         function exists purely for Redis API completion.
         """
 
-        return await self.execute_command("EVALSHA", sha, numkeys, *keys_and_args)
+        return await self.execute_command("EVALSHA", sha1, len(keys), *keys, *args)
 
-    async def script_exists(self, *args):
+    async def script_exists(self, *sha1s: str) -> List[bool]:
         """
         Check if a script exists in the script cache by specifying the SHAs of
-        each script as ``args``. Returns a list of boolean values indicating if
-        if each already script exists in the cache.
+        each script as ``sha1s``.
+
+        :return: a list of boolean values indicating if each already script exists in the cache.
         """
 
-        return await self.execute_command("SCRIPT EXISTS", *args)
+        return await self.execute_command("SCRIPT EXISTS", *sha1s)
 
-    async def script_flush(self, sync_type=None):
+    @versionchanged(
+        reason="""
+        - Changed :paramref:`sync_type` to :class:`PureToken`
+        """,
+        version="3.0.0",
+    )
+    @versionadded(version="2.1.0")
+    async def script_flush(
+        self, sync_type: Literal[PureToken.SYNC, PureToken.ASYNC] = PureToken.SYNC
+    ) -> bool:
         """
         Flushes all scripts from the script cache
-
-        :param sync_type: ``SYNC`` or ``ASYNC``. Default ``SYNC``
-
-        .. versionadded:: 2.1.0
         """
 
-        if sync_type not in ["SYNC", "ASYNC", None]:
-            raise DataError(
-                "SCRIPT FLUSH defaults to SYNC in redis > 6.2, or "
-                "accepts SYNC/ASYNC. For older versions, "
-                "of redis leave as None."
-            )
-
-        if sync_type is None:
-            pieces = []
-        else:
-            pieces = [sync_type]
+        if sync_type:
+            pieces = [sync_type.value]
 
         return await self.execute_command("SCRIPT FLUSH", *pieces)
 
-    async def script_kill(self):
+    async def script_kill(self) -> bool:
         """Kills the currently executing Lua script"""
 
         return await self.execute_command("SCRIPT KILL")
 
-    async def script_load(self, script):
+    async def script_load(self, script: str) -> str:
         """Loads a Lua ``script`` into the script cache. Returns the SHA."""
 
         return await self.execute_command("SCRIPT LOAD", script)

@@ -1,17 +1,28 @@
 import datetime
 import time
-from typing import Dict, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
-from coredis.commands import CommandMixin
+from deprecated.sphinx import versionadded, versionchanged
+
+from coredis.commands import CommandGroup, CommandMixin, redis_command
 from coredis.exceptions import DataError, ReadOnlyError, RedisError
+from coredis.tokens import PureToken
 from coredis.utils import (
     NodeFlag,
     bool_ok,
     dict_merge,
+    dict_to_flat_list,
     iteritems,
     list_or_args,
     nativestr,
+    normalized_milliseconds,
+    normalized_seconds,
+    normalized_time_seconds,
     string_keys_to_dict,
+)
+from coredis.validators import (
+    mutually_exclusive_parameters,
+    mutually_inclusive_parameters,
 )
 
 
@@ -102,21 +113,27 @@ class StringsCommandMixin(CommandMixin):
         },
     )
 
-    async def append(self, key, value):
+    @redis_command("APPEND", group=CommandGroup.STRING)
+    async def append(self, key: str, value: str) -> int:
         """
-        Appends the string ``value`` to the value at ``key``. If ``key``
-        doesn't already exist, create it with a value of ``value``.
-        Returns the new length of the value at ``key``.
+        Append a value to a key
+
+        :return: the length of the string after the append operation.
         """
 
         return await self.execute_command("APPEND", key, value)
 
-    async def bitcount(self, key, start=None, end=None):
+    @versionchanged(version="3.0.0")
+    @mutually_inclusive_parameters("start", "end")
+    async def bitcount(
+        self, key: str, *, start: Optional[int] = None, end: Optional[int] = None
+    ) -> int:
         """
         Returns the count of set bits in the value of ``key``.  Optional
         ``start`` and ``end`` paramaters indicate which bytes to consider
+
         """
-        params = [key]
+        params: List[Union[int, str]] = [key]
 
         if start is not None and end is not None:
             params.append(start)
@@ -126,7 +143,7 @@ class StringsCommandMixin(CommandMixin):
 
         return await self.execute_command("BITCOUNT", *params)
 
-    async def bitop(self, operation, destkey, *keys):
+    async def bitop(self, operation: str, destkey: str, *keys: str) -> int:
         """
         Perform a bitwise operation using ``operation`` between ``keys`` and
         store the result in ``destkey``.
@@ -134,10 +151,17 @@ class StringsCommandMixin(CommandMixin):
 
         return await self.execute_command("BITOP", operation, destkey, *keys)
 
-    async def bitpos(self, key, bit, start=None, end=None):
+    async def bitpos(
+        self,
+        key: str,
+        bit: int,
+        *,
+        start: Optional[int] = None,
+        end: Optional[int] = None,
+    ) -> int:
         """
         Return the position of the first bit set to 1 or 0 in a string.
-        ``start`` and ``end`` difines search range. The range is interpreted
+        ``start`` and ``end`` defines the search range. The range is interpreted
         as a range of bytes and not a range of bits, so start=0 and end=2
         means to look at the first three bytes.
         """
@@ -155,7 +179,7 @@ class StringsCommandMixin(CommandMixin):
 
         return await self.execute_command("BITPOS", *params)
 
-    def bitfield(self, key):
+    def bitfield(self, key: str) -> BitFieldOperation:
         """
         Return a :class:`BitFieldOperation` instance to conveniently construct one or
         more bitfield operations on ``key``.
@@ -163,58 +187,101 @@ class StringsCommandMixin(CommandMixin):
 
         return BitFieldOperation(self, key)
 
-    def bitfield_ro(self, key):
+    @versionadded(version="2.1.0")
+    def bitfield_ro(self, key: str) -> BitFieldOperation:
         """
         Return a :class:`BitFieldOperation` instance to conveniently construct bitfield
         operations on a read only replica against ``key``.
 
         Raises :class:`ReadOnlyError` if a write operation is attempted
-
-        .. versionadded:: 2.1.0
         """
 
         return BitFieldOperation(self, key, readonly=True)
 
-    async def decr(self, key, amount=1):
+    @redis_command(
+        "DECR",
+        group=CommandGroup.STRING,
+    )
+    async def decr(self, key: str) -> int:
         """
-        Decrements the value of ``key`` by ``amount``.  If no key exists,
-        the value will be initialized as 0 - ``amount``
-        """
+        Decrement the integer value of a key by one
 
-        return await self.execute_command("DECRBY", key, amount)
-
-    async def decrby(self, key, amount=1):
-        """
-        Decrements the value of ``key`` by ``amount``.  If no key exists,
-        the value will be initialized as 0 - ``amount``
-
-        .. versionadded:: 2.1.0
+        :return: the value of ``key`` after the decrement
         """
 
-        return await self.execute_command("DECRBY", key, amount)
+        return await self.decrby(key, 1)
 
-    async def get(self, key):
+    @versionadded(version="2.1.0")
+    @redis_command(
+        "DECRBY",
+        group=CommandGroup.STRING,
+    )
+    async def decrby(self, key: str, decrement: int) -> int:
         """
-        Return the value at key ``key``, or None if the key doesn't exist
+        Decrement the integer value of a key by the given number
+
+        :return: the value of ``key`` after the decrement
+        """
+
+        return await self.execute_command("DECRBY", key, decrement)
+
+    @redis_command(
+        "GET",
+        group=CommandGroup.STRING,
+    )
+    async def get(self, key: str) -> Optional[str]:
+        """
+        Get the value of a key
+
+        :return: the value of ``key``, or ``None`` when ``key`` does not exist.
         """
 
         return await self.execute_command("GET", key)
 
-    async def getdel(self, key):
+    @versionadded(version="2.1.0")
+    @redis_command(
+        "GETDEL",
+        group=CommandGroup.STRING,
+        minimum_server_version="6.2.0",
+    )
+    async def getdel(self, key: str) -> Optional[str]:
         """
-        Get the value at key ``key`` and delete the key. This command
-        is similar to GET, except for the fact that it also deletes
-        the key on success (if and only if the key's value type
-        is a string).
+        Get the value of a key and delete the key
 
-        .. versionadded:: 2.1.0
+
+        :return: the value of ``key``, ``None`` when ``key`` does not exist,
+         or an error if the key's value type isn't a string.
         """
 
         return await self.execute_command("GETDEL", key)
 
-    async def getex(self, key, ex=None, px=None, exat=None, pxat=None, persist=False):
+    @versionadded(version="2.1.0")
+    @mutually_exclusive_parameters(
+        "ex",
+        "px",
+        "exat",
+        "pxat",
+        "persist",
+        details="See https://redis.io/commands/getex",
+    )
+    @redis_command(
+        "GETEX",
+        group=CommandGroup.STRING,
+        minimum_server_version="6.2.0",
+    )
+    async def getex(
+        self,
+        key: str,
+        *,
+        ex: Optional[Union[int, datetime.timedelta]] = None,
+        px: Optional[Union[int, datetime.timedelta]] = None,
+        exat: Optional[int] = None,
+        pxat: Optional[int] = None,
+        persist: Optional[bool] = None,
+    ) -> Optional[str]:
         """
-        Get the value of key and optionally set its expiration.
+        Get the value of a key and optionally set its expiration
+
 
         GETEX is similar to GET, but is a write command with
         additional options. All time parameters can be given as
@@ -229,12 +296,12 @@ class StringsCommandMixin(CommandMixin):
          specified in unix time.
         :param persist: remove the time to live associated with ``key``.
 
-        .. versionadded:: 2.1.0
+        :return: the value of ``key``, or ``None`` when ``key`` does not exist.
         """
 
         opset = {ex, px, exat, pxat}
 
-        if len(opset) > 2 or len(opset) > 1 and persist:
+        if len(opset) > 1 and persist:
             raise DataError(
                 "``ex``, ``px``, ``exat``, ``pxat``, "
                 "and ``persist`` are mutually exclusive."
@@ -279,102 +346,132 @@ class StringsCommandMixin(CommandMixin):
 
         return await self.execute_command("GETEX", key, *pieces)
 
-    async def getbit(self, key, offset):
-        "Returns a boolean indicating the value of ``offset`` in ``key``"
+    @redis_command(
+        "GETBIT",
+        group=CommandGroup.STRING,
+    )
+    async def getbit(self, key: str, offset: int) -> int:
+        """
+        Returns the bit value at offset in the string value stored at key
+
+        :return: the bit value stored at ``offset``.
+        """
 
         return await self.execute_command("GETBIT", key, offset)
 
-    async def getrange(self, key, start, end):
+    @redis_command(
+        "GETRANGE",
+        group=CommandGroup.STRING,
+    )
+    async def getrange(self, key: str, start: int, end: int) -> str:
         """
-        Returns the substring of the string value stored at ``key``,
-        determined by the offsets ``start`` and ``end`` (both are inclusive)
+        Get a substring of the string stored at a key
+
+        :return: The substring of the string value stored at ``key``,
+         determined by the offsets ``start`` and ``end`` (both are inclusive)
         """
 
         return await self.execute_command("GETRANGE", key, start, end)
 
-    async def getset(self, key, value):
+    @redis_command(
+        "GETRANGE",
+        group=CommandGroup.STRING,
+    )
+    async def getset(self, key: str, value: str) -> Optional[str]:
         """
-        Sets the value at key ``key`` to ``value``
-        and returns the old value at key ``key`` atomically.
+        Set the string value of a key and return its old value
+
+        :return: the old value stored at ``key``, or ``None`` when ``key`` did not exist.
         """
 
         return await self.execute_command("GETSET", key, value)
 
-    async def incr(self, key, amount=1):
+    @redis_command(
+        "INCR",
+        group=CommandGroup.STRING,
+    )
+    async def incr(self, key: str) -> int:
         """
-        Increments the value of ``key`` by ``amount``.  If no key exists,
-        the value will be initialized as ``amount``
-        """
+        Increment the integer value of a key by one
 
-        return await self.execute_command("INCRBY", key, amount)
-
-    async def incrby(self, key, amount=1):
-        """
-        Increments the value of ``key`` by ``amount``.  If no key exists,
-        the value will be initialized as ``amount``
+        :return: the value of ``key`` after the increment.
+         If no key exists, the value will be initialized as 1.
         """
 
-        # An alias for ``incr()``, because it is already implemented
-        # as INCRBY redis command.
+        return await self.incrby(key, 1)
 
-        return await self.incr(key, amount)
-
-    async def incrbyfloat(self, key, amount=1.0):
+    @redis_command(
+        "INCRBY",
+        group=CommandGroup.STRING,
+    )
+    async def incrby(self, key: str, increment: int) -> int:
         """
-        Increments the value at key ``key`` by floating ``amount``.
-        If no key exists, the value will be initialized as ``amount``
+        Increment the integer value of a key by the given amount
+
+        :return: the value of ``key`` after the increment
+          If no key exists, the value will be initialized as ``increment``
         """
 
-        return await self.execute_command("INCRBYFLOAT", key, amount)
+        return await self.execute_command("INCRBY", key, increment)
 
-    async def mget(self, keys, *args):
+    @redis_command(
+        "INCRBYFLOAT",
+        group=CommandGroup.STRING,
+    )
+    async def incrbyfloat(self, key: str, increment: float) -> float:
+        """
+        Increment the float value of a key by the given amount
+
+        :return: the value of ``key`` after the increment.
+         If no key exists, the value will be initialized as ``increment``
+        """
+
+        return await self.execute_command("INCRBYFLOAT", key, increment)
+
+    @redis_command(
+        "MGET",
+        group=CommandGroup.STRING,
+    )
+    async def mget(self, *keys: str) -> List[str]:
         """
         Returns a list of values ordered identically to ``keys``
         """
-        args = list_or_args(keys, args)
 
-        return await self.execute_command("MGET", *args)
+        return await self.execute_command("MGET", *keys)
 
-    async def mset(self, *args, **kwargs):
+    @redis_command(
+        "MSET",
+        group=CommandGroup.STRING,
+    )
+    async def mset(self, key_values: Dict[str, str]) -> bool:
         """
-        Sets key/values based on a mapping. Mapping can be supplied as a single
-        dictionary argument or as kwargs.
-        """
-
-        if args:
-            if len(args) != 1 or not isinstance(args[0], dict):
-                raise RedisError("MSET requires **kwargs or a single dict arg")
-            kwargs.update(args[0])
-        items = []
-
-        for pair in iteritems(kwargs):
-            items.extend(pair)
-
-        return await self.execute_command("MSET", *items)
-
-    async def msetnx(self, *args, **kwargs):
-        """
-        Sets key/values based on a mapping if none of the keys are already set.
-        Mapping can be supplied as a single dictionary argument or as kwargs.
-        Returns a boolean indicating if the operation was successful.
+        Sets multiple keys to multiple values
         """
 
-        if args:
-            if len(args) != 1 or not isinstance(args[0], dict):
-                raise RedisError("MSETNX requires **kwargs or a single " "dict arg")
-            kwargs.update(args[0])
-        items = []
+        return await self.execute_command("MSET", *dict_to_flat_list(key_values))
 
-        for pair in iteritems(kwargs):
-            items.extend(pair)
-
-        return await self.execute_command("MSETNX", *items)
-
-    async def psetex(self, key, milliseconds, value):
+    @redis_command(
+        "MSETNX",
+        group=CommandGroup.STRING,
+    )
+    async def msetnx(self, key_values: Dict[str, str]) -> bool:
         """
-        Set the value of key ``key`` to ``value`` that expires in ``milliseconds``
-        milliseconds. ``milliseconds`` can be represented by an integer or a Python
-        timedelta object
+        Set multiple keys to multiple values, only if none of the keys exist
+
+        :return: Whether all the keys were set
+        """
+
+        return await self.execute_command("MSETNX", *dict_to_flat_list(key_values))
+
+    @redis_command(
+        "PSETEX",
+        group=CommandGroup.STRING,
+    )
+    async def psetex(
+        self, key: str, milliseconds: Union[int, datetime.timedelta], value: str
+    ) -> None:
+        """
+        Set the value and expiration in milliseconds of a key
         """
 
         if isinstance(milliseconds, datetime.timedelta):
@@ -385,9 +482,38 @@ class StringsCommandMixin(CommandMixin):
 
         return await self.execute_command("PSETEX", key, milliseconds, value)
 
-    async def set(self, key, value, ex=None, px=None, nx=False, xx=False):
+    @mutually_exclusive_parameters(
+        "ex",
+        "px",
+        "exat",
+        "pxat",
+        "keepttl",
+        details="See: https://redis.io/commands/SET",
+    )
+    @redis_command(
+        "SET",
+        group=CommandGroup.STRING,
+        arguments={
+            "condition": {
+                "minimum_server_version": "2.6.12",
+            },
+        },
+    )
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: Optional[Union[int, datetime.timedelta]] = None,
+        px: Optional[Union[int, datetime.timedelta]] = None,
+        exat: Optional[Union[int, datetime.datetime]] = None,
+        pxat: Optional[Union[int, datetime.datetime]] = None,
+        keepttl: Optional[bool] = None,
+        condition: Optional[Literal[PureToken.NX, PureToken.XX]] = None,
+        get: Optional[bool] = None,
+    ) -> Optional[Union[str, bool]]:
         """
-        Set the value at key ``key`` to ``value``
+        Set the string value of a key
 
         ``ex`` sets an expire flag on key ``key`` for ``ex`` seconds.
 
@@ -399,60 +525,62 @@ class StringsCommandMixin(CommandMixin):
         ``xx`` if set to True, set the value at key ``key`` to ``value`` if it
             already exists.
         """
-        pieces = [key, value]
+        pieces: List[Union[int, str]] = [key, value]
 
         if ex is not None:
             pieces.append("EX")
-
-            if isinstance(ex, datetime.timedelta):
-                ex = ex.seconds + ex.days * 24 * 3600
-            pieces.append(ex)
+            pieces.append(normalized_seconds(ex))
 
         if px is not None:
             pieces.append("PX")
+            pieces.append(normalized_milliseconds(px))
 
-            if isinstance(px, datetime.timedelta):
-                ms = int(px.microseconds / 1000)
-                px = (px.seconds + px.days * 24 * 3600) * 1000 + ms
-            pieces.append(px)
+        if exat is not None:
+            pieces.append("EXAT")
+            pieces.append(normalized_time_seconds(exat))
 
-        if nx:
-            pieces.append("NX")
+        if pxat is not None:
+            pieces.append("PXAT")
+            pieces.append(normalized_time_seconds(pxat))
 
-        if xx:
-            pieces.append("XX")
+        if get:
+            pieces.append("GET")
+
+        if condition:
+            pieces.append(condition.value)
 
         return await self.execute_command("SET", *pieces)
 
-    async def setbit(self, key, offset, value):
+    async def setbit(self, key: str, offset: int, value: int) -> int:
         """
         Flag the ``offset`` in ``key`` as ``value``. Returns a boolean
         indicating the previous value of ``offset``.
+
+        :return: the original bit value stored at ``offset``.
         """
         value = value and 1 or 0
 
         return await self.execute_command("SETBIT", key, offset, value)
 
-    async def setex(self, key, seconds, value):
+    async def setex(
+        self, key: str, value: str, seconds: Union[int, datetime.timedelta]
+    ) -> str:
         """
-        Set the value of key ``key`` to ``value`` that expires in ``time``
-        seconds. ``time`` can be represented by an integer or a Python
-        timedelta object.
+        Set the value of key ``key`` to ``value`` that expires in ``seconds``
         """
 
-        if isinstance(seconds, datetime.timedelta):
-            seconds = seconds.seconds + time.days * 24 * 3600
+        return await self.execute_command(
+            "SETEX", key, normalized_seconds(seconds), value
+        )
 
-        return await self.execute_command("SETEX", key, seconds, value)
-
-    async def setnx(self, key, value):
+    async def setnx(self, key: str, value: str) -> int:
         """
         Sets the value of key ``key`` to ``value`` if key doesn't exist
         """
 
         return await self.execute_command("SETNX", key, value)
 
-    async def setrange(self, key, offset, value):
+    async def setrange(self, key: str, offset: int, value: str) -> int:
         """
         Overwrite bytes in the value of ``key`` starting at ``offset`` with
         ``value``. If ``offset`` plus the length of ``value`` exceeds the
@@ -461,20 +589,27 @@ class StringsCommandMixin(CommandMixin):
         will be used to pad between the end of the previous value and the start
         of what's being injected.
 
-        Returns the length of the new string.
+        :return: the length of the string after it was modified by the command.
         """
 
         return await self.execute_command("SETRANGE", key, offset, value)
 
-    async def strlen(self, key):
-        """Returns the number of bytes stored in the value of ``key``"""
+    async def strlen(self, key: str) -> int:
+        """
+        Get the length of the value stored in a key
+
+        :return: the length of the string at ``key``, or ``0`` when ``key`` does not
+        """
 
         return await self.execute_command("STRLEN", key)
 
-    async def substr(self, key, start, end=-1):
+    async def substr(self, key: str, start: int, end: int) -> str:
         """
-        Returns a substring of the string at key ``key``. ``start`` and ``end``
-        are 0-based integers specifying the portion of the string to return.
+        Get a substring of the string stored at a key
+
+        :return: the substring of the string value stored at key, determined by the offsets
+         ``start`` and ``end`` (both are inclusive). Negative offsets can be used in order to
+         provide an offset starting from the end of the string.
         """
 
         return await self.execute_command("SUBSTR", key, start, end)

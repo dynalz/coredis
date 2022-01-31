@@ -1,16 +1,23 @@
 import datetime
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from deprecated.sphinx import versionadded
 
 from coredis.exceptions import RedisError
+from coredis.tokens import PureToken
 from coredis.utils import (
     NodeFlag,
     b,
     bool_ok,
+    bool_ok_or_int,
     dict_merge,
     list_keys_to_dict,
     nativestr,
     pairs_to_dict,
+    string_if_bytes,
     string_keys_to_dict,
 )
+from coredis.validators import mutually_inclusive_parameters
 
 from . import CommandMixin
 
@@ -27,14 +34,25 @@ def parse_slowlog_get(response, **options):
     ]
 
 
+def parse_client_info(info):
+    # Values might contain '='
+
+    return dict([pair.split("=", 1) for pair in nativestr(info).split(" ")])
+
+
 def parse_client_list(response, **options):
     clients = []
 
-    for c in nativestr(response).splitlines():
-        # Values might contain '='
-        clients.append(dict([pair.split("=", 1) for pair in c.split(" ")]))
+    for c in response.splitlines():
+        clients.append(parse_client_info(c))
 
     return clients
+
+
+def parse_tracking_info(response, **options):
+    values = [string_if_bytes(r) for r in response]
+
+    return dict(zip(values[::2], values[1::2]))
 
 
 def parse_config_get(response, **options):
@@ -159,11 +177,17 @@ class ServerCommandMixin(CommandMixin):
             "SLOWLOG GET": parse_slowlog_get,
             "SLOWLOG LEN": int,
             "SLOWLOG RESET": bool_ok,
+            "CLIENT TRACKING": bool_ok_or_int,
             "CLIENT GETNAME": lambda r: r and nativestr(r),
-            "CLIENT KILL": bool_ok,
+            "CLIENT KILL": bool_ok_or_int,
+            "CLIENT INFO": parse_client_info,
+            "CLIENT ID": lambda r: int(r),
             "CLIENT LIST": parse_client_list,
+            "CLIENT TRACKINGINFO": parse_tracking_info,
             "CLIENT SETNAME": bool_ok,
             "CLIENT PAUSE": bool_ok,
+            "CLIENT UNPAUSE": bool_ok,
+            "CLIENT UNBLOCK": lambda r: int(r),
             "CONFIG GET": parse_config_get,
             "CONFIG RESETSTAT": bool_ok,
             "CONFIG SET": bool_ok,
@@ -187,33 +211,252 @@ class ServerCommandMixin(CommandMixin):
 
         return await self.execute_command("BGSAVE")
 
-    async def client_kill(self, address):
-        """Disconnects the client at ``address`` (ip:port)"""
+    async def client_kill(
+        self,
+        *,
+        ip_port: Optional[str] = None,
+        id_: Optional[int] = None,
+        type_: Optional[
+            Literal[
+                PureToken.NORMAL,
+                PureToken.MASTER,
+                PureToken.SLAVE,
+                PureToken.REPLICA,
+                PureToken.PUBSUB,
+            ]
+        ] = None,
+        user: Optional[str] = None,
+        addr: Optional[str] = None,
+        laddr: Optional[str] = None,
+        skipme: Optional[bool] = None
+    ) -> Union[int, bool]:
 
-        return await self.execute_command("CLIENT KILL", address)
+        """
+        Disconnects the client at ``ip_port``
 
-    async def client_list(self):
-        """Returns a list of currently connected clients"""
+        :return: True if the connection exists and has been closed
+         or the number of clients killed.
 
-        return await self.execute_command("CLIENT LIST")
+        ... versionchanged:: 3.0.0
+        """
 
-    async def client_getname(self):
-        """Returns the current connection name"""
+        pieces = []
+
+        if ip_port:
+            pieces.append(ip_port)
+
+        if id_:
+            pieces.extend(["ID", id_])
+
+        if type_:
+            pieces.extend(["TYPE", type_.value])
+
+        if user:
+            pieces.extend(["USER", user])
+
+        if addr:
+            pieces.extend(["ADDR", addr])
+
+        if laddr:
+            pieces.extend(["LADDR", laddr])
+
+        if laddr:
+            pieces.extend(["SKIPME", skipme and "yes" or "no"])
+
+        return await self.execute_command("CLIENT KILL", *pieces)
+
+    async def client_list(
+        self,
+        *,
+        type_: Optional[
+            Literal[
+                PureToken.NORMAL, PureToken.MASTER, PureToken.REPLICA, PureToken.PUBSUB
+            ]
+        ] = None,
+        client_id: Optional[int] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Get the list of client connections
+        :return: a list of dictionaries containing client fields
+        """
+
+        pieces = []
+
+        if type_:
+            pieces.extend(["TYPE", type_.value])
+
+        if client_id is not None:
+            pieces.extend(["ID", client_id])
+
+        return await self.execute_command("CLIENT LIST", *pieces)
+
+    async def client_getname(self) -> Optional[str]:
+        """
+        Returns the current connection name
+
+        :return: The connection name, or ``None`` if no name is set.
+        """
 
         return await self.execute_command("CLIENT GETNAME")
 
-    async def client_setname(self, name):
-        """Sets the current connection name"""
-
-        return await self.execute_command("CLIENT SETNAME", name)
-
-    async def client_pause(self, timeout=0):
+    async def client_setname(self, connection_name: str) -> bool:
         """
-        Suspends all the Redis clients for the specified amount of time
-        (in milliseconds).
+        Set the current connection name
+        :return: ```True``` if the connection name was successfully set.
+        """
+
+        return await self.execute_command("CLIENT SETNAME", connection_name)
+
+    async def client_pause(
+        self,
+        timeout: int,
+        *,
+        mode: Optional[Literal[PureToken.WRITE, PureToken.ALL]] = None
+    ) -> bool:
+        """
+        Stop processing commands from clients for some time
+
+        :return: The command returns ``True`` or raises an error if the timeout is invalid.
+
+        .. versionchanged:: 3.0.0
+
+          Added the optional :paramref:`mode` parameter
+
         """
 
         return await self.execute_command("CLIENT PAUSE", timeout)
+
+    async def client_unpause(self) -> bool:
+        """
+        Resume processing of clients that were paused
+
+        :return: The command returns ```True```
+
+        .. versionadded:: 3.0.0
+        """
+
+        return await self.execute_command("CLIENT UNPAUSE")
+
+    async def client_unblock(
+        self,
+        client_id: int,
+        *,
+        timeout_error: Optional[Literal[PureToken.TIMEOUT, PureToken.ERROR]] = None
+    ) -> int:
+        """
+        Unblock a client blocked in a blocking command from a different connection
+
+        :return: 1 if client was unblocked else 0
+
+        .. versionadded:: 3.0.0
+        """
+        pieces = [client_id]
+
+        if timeout_error is not None:
+            pieces.append(timeout_error.value)
+
+        return await self.execute_command("CLIENT UNBLOCK", *pieces)
+
+    async def client_getredir(self) -> int:
+        """
+        Get tracking notifications redirection client ID if any
+
+        :return: the ID of the client we are redirecting the notifications to.
+         The command returns ``-1`` if client tracking is not enabled,
+         or ``0`` if client tracking is enabled but we are not redirecting the
+         notifications to any client.
+
+
+        .. versionadded:: 3.0.0
+        """
+
+        return await self.execute_command("CLIENT GETREDIR")
+
+    async def client_id(self) -> int:
+        """
+        Returns the client ID for the current connection
+
+        :return: The id of the client.
+
+        .. versionadded:: 3.0.0
+        """
+
+        return await self.execute_command("CLIENT ID")
+
+    async def client_info(self) -> Dict[str, str]:
+        """
+        Returns information about the current client connection.
+
+        .. versionadded:: 3.0.0
+        """
+
+        return await self.execute_command("CLIENT INFO")
+
+    async def client_reply(
+        self, mode: Literal[PureToken.ON, PureToken.OFF, PureToken.SKIP]
+    ) -> bool:
+        """
+        Instruct the server whether to reply to commands
+
+        :return: ```True```.
+
+        .. versionadded:: 3.0.0
+        """
+
+        return self.execute_command("CLIENT REPLY", [mode.value])
+
+    async def client_tracking(
+        self,
+        status: Literal[PureToken.ON, PureToken.OFF],
+        *,
+        prefixes: Optional[List[Optional[str]]] = None,
+        redirect: Optional[int] = None,
+        bcast: Optional[bool] = None,
+        optin: Optional[bool] = None,
+        optout: Optional[bool] = None,
+        noloop: Optional[bool] = None
+    ) -> bool:
+        """
+        Enable or disable server assisted client side caching support
+
+        :return: ```True``` if the connection was successfully put in tracking mode or if the
+         tracking mode was successfully disabled.
+
+        .. versionadded:: 3.0.0
+        """
+
+        pieces = [status.value]
+
+        if prefixes:
+            pieces.extend(prefixes)
+
+        if redirect is not None:
+            pieces.extend(["REDIRECT", redirect])
+
+        if bcast is not None:
+            pieces.append("BCAST")
+
+        if optin is not None:
+            pieces.append("OPTIN")
+
+        if optout is not None:
+            pieces.append("OPTOUT")
+
+        if noloop is not None:
+            pieces.append("NOLOOP")
+
+        return await self.execute_command("CLIENT TRACKING", *pieces)
+
+    async def client_trackinginfo(self) -> Dict[str, str]:
+        """
+        Return information about server assisted client side caching for the current connection
+
+        :return: a mapping of tracking information sections and their respective values
+
+        .. versionadded:: 3.0.0
+        """
+
+        return await self.execute_command("CLIENT TRACKINGINFO")
 
     async def config_get(self, pattern="*"):
         """Returns a dictionary of configuration based on the ``pattern``"""
@@ -280,6 +523,299 @@ class ServerCommandMixin(CommandMixin):
         """
 
         return await self.execute_command("LASTSAVE")
+
+    @versionadded(version="3.0.0")
+    async def memory_doctor(self) -> Any:
+        """
+        Outputs memory problems report
+
+
+
+
+
+        :return:
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def memory_malloc_stats(self) -> str:
+        """
+        Show allocator internal stats
+
+
+
+
+
+        :return:
+
+        the memory allocator's internal statistics report
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def memory_malloc_stats(self) -> str:
+        """
+        Show allocator internal stats
+
+
+
+
+
+        :return:
+
+        the memory allocator's internal statistics report
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def memory_purge(self) -> str:
+        """
+        Ask the allocator to release memory
+
+
+
+
+
+        :return:
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def memory_stats(self) -> list:
+        """
+        Show memory usage details
+
+
+
+
+
+        :return:
+
+        nested list of memory usage metrics and their values
+        **A note about the word slave used in this man page**: Starting with Redis 5, if not for backward compatibility, the Redis project no longer uses the word slave. Unfortunately in this command the word slave is part of the protocol, so we'll be able to remove such occurrences only when this API will be naturally deprecated.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def memory_usage(
+        self, key: str, *, samples: Optional[int] = None
+    ) -> Optional[int]:
+        """
+        Estimate the memory usage of a key
+
+
+        :param key:
+        :param samples:
+
+
+
+        :return:
+
+        the memory usage in bytes, or ``None`` when the key does not exist.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def module_list(self) -> list:
+        """
+        List all modules loaded by the server
+
+
+
+
+
+        :return:
+
+        list of loaded modules. Each element in the list represents a
+        module, and is in itself a list of property names and their values. The
+        following properties is reported for each loaded module:
+        *   ``name``: Name of the module
+        *   ``ver``: Version of the module
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def module_load(self, *, path: str, args: Optional[List[str]]) -> bool:
+        """
+        Load a module
+
+
+        :param path:
+        :param args:
+
+
+
+        :return:
+
+        ``OK`` if module was loaded.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def module_unload(self, *, name: str) -> bool:
+        """
+        Unload a module
+
+
+        :param name:
+
+
+
+        :return:
+
+        ``OK`` if module was unloaded.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def monitor(self) -> Any:
+        """
+        Listen for all requests received by the server in real time
+
+
+
+
+
+        :return:
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def replicaof(self, *, host: str, port: str) -> str:
+        """
+        Make the server a replica of another instance, or promote it as master.
+
+
+        :param host:
+        :param port:
+
+
+
+        :return:
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def swapdb(self, *, index1: int, index2: int) -> bool:
+        """
+        Swaps two Redis databases
+
+
+        :param index1:
+        :param index2:
+
+
+
+        :return:
+
+        ``OK`` if ``SWAPDB`` was executed correctly.
+
+        """
+
+    @mutually_inclusive_parameters("host", "port")
+    @versionadded(version="3.0.0")
+    async def failover(
+        self,
+        *,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        force: Optional[bool] = None,
+        abort: Optional[bool] = None,
+        timeout: Optional[Union[int, datetime.timedelta]] = None
+    ) -> bool:
+        """
+        Start a coordinated failover between this server and one of its replicas.
+
+
+
+        :param host:
+        :param port:
+        :param force:
+        :param abort:
+        :param timeout:
+
+
+        :return:
+
+        ``OK`` if the command was accepted and a coordinated failover is in progress. An error if the operation cannot be executed.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def latency_doctor(self) -> str:
+        """
+        Return a human readable latency analysis report.
+
+
+
+
+
+        :return:
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def latency_graph(self, *, event: str) -> Any:
+        """
+        Return a latency graph for the event.
+
+
+
+        :param event:
+
+
+        :return:
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def latency_history(self, *, event: str) -> list:
+        """
+        Return timestamp-latency samples for the event.
+
+
+
+        :param event:
+
+
+        :return:
+
+        The command returns an array where each element is a two elements array
+        representing the timestamp and the latency of the event.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def latency_latest(self) -> list:
+        """
+        Return the latest latency samples for all events.
+
+
+
+
+
+        :return:
+
+        The command returns an array where each element is a four elements array
+        representing the event's name, timestamp, latest and all-time latency measurements.
+
+        """
+
+    @versionadded(version="3.0.0")
+    async def latency_reset(self, *, events: Optional[List[str]]) -> int:
+        """
+        Reset latency data for one or more events.
+
+
+
+        :param events:
+
+
+        :return:
+
+        the number of event time series that were reset.
+
+        """
 
     async def save(self):
         """
@@ -357,7 +893,7 @@ class ServerCommandMixin(CommandMixin):
         """
         Get the Redis version and a piece of generative computer art
 
-        .. versionadded:: 2.1.0
+        ... versionadded:: 2.1.0
         """
 
         return await self.execute_command("LOLWUT VERSION", version, *arguments)
