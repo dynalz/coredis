@@ -4,14 +4,20 @@ API Documentation
 
 Clients
 ^^^^^^^
+Redis
+-----
 .. autoclass::
    StrictRedis
 
+Cluster
+-------
 .. autoclass::
    StrictRedisCluster
 
 .. currentmodule:: coredis.sentinel
 
+Sentinel
+--------
 .. autoclass::
    Sentinel
 
